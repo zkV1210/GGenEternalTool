@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "normalization": {"size": [200, 400], "ratio_tolerance": 0.05},
+  "rarity": {
+    "classes": ["SR", "SSR", "UR"],
+    "regions": [[4, 60, 14, 120], [4, 125, 14, 185], [4, 190, 14, 250]],
+    "bins": [8, 8, 8],
+    "neighbors": 3,
+    "min_references": 2,
+    "max_distance": 0.4,
+    "min_margin": 0.08,
+    "max_segment_distance": 0.6
+  },
+  "role": {
+    "search_region": [15, 0, 85, 60],
+    "hue_ranges": {"ATTACK": [[0, 12], [168, 179]], "DEFENSE": [[90, 130]], "SUPPORT": [[18, 38]]},
+    "min_saturation": 65,
+    "min_value": 45,
+    "min_component_area": 40,
+    "max_component_area": 2000,
+    "scales": [0.9, 1.0, 1.1],
+    "min_shape_score": 0.7,
+    "min_margin": 0.06,
+    "min_color_fraction": 0.25
+  },
+  "strict_filter_enabled": false
+}

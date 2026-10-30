@@ -1,10 +1,10 @@
 # GGET Account Scanner
 
-《SD 鋼彈 G 世代永恆》（SD Gundam G Generation ETERNAL）的**帳號資料擷取與 AI 諮詢工具**，目前已建立 Layout 解析與單張圖片裁切原型。
+《SD 鋼彈 G 世代永恆》（SD Gundam G Generation ETERNAL）的**帳號資料擷取與 AI 諮詢工具**，目前已建立 Layout 裁切、本地 Catalog 與卡片 UI 屬性辨識原型。
 
 本專案希望讓玩家不必手動逐台登記機體：先把遊戲畫面轉換成可檢查、可修改的帳號資料，再交給 LLM，根據實際持有內容討論配隊、養成資源、交換與抽卡選擇。
 
-> **專案狀態：幾何處理與本地 Catalog 原型。** 已實作 Layout JSON 載入與驗證、網格展開、矩形／透視裁切、Debug Overlay 及 CLI，以及 Catalog Schema、查詢、驗證、離線匯入與可續跑的公開資料／圖片抓取工具。機體辨識、OCR、Inventory JSON、模擬器控制與 LLM 功能尚未實作。
+> **專案狀態：幾何處理、本地 Catalog 與屬性辨識原型。** 已實作 Layout JSON 載入與驗證、網格展開、矩形／透視裁切、Debug Overlay 及 CLI，以及 Catalog Schema、查詢、驗證、離線匯入與可續跑抓取工具。已裁切卡片可另外進行尺寸標準化、粗邊框 Lab 參考比對（SR／SSR／UR）與職能徽章 HSV／模板驗證。機體立繪匹配、OCR、Inventory JSON、模擬器控制與 LLM 功能尚未實作。
 
 ## 目前可用：Layout 與單張圖片裁切
 
@@ -53,6 +53,7 @@ uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
 
 - [main baseline 與 worktree 協作](docs/baseline.md)：確認此次待提交內容、驗證結果及本機資料邊界時閱讀；baseline Commit 獲准完成後，依此建立各功能的獨立分支與環境。
 - [本地機體識別 Catalog](docs/catalog.md)：建立或查詢機體 JSON 時閱讀，包含掛機啟動指令、英文進度 log、停止與續跑規則、圖片對應、離線匯入及來源限制；與 Layout／Cropper 獨立。
+- [卡片屬性辨識](docs/recognition.md)：串接裁切結果、執行單張／批次分類、查看 Debug、加入稀有度樣本或實際職能模板時閱讀；包含參數、UNKNOWN／嚴格篩選規則、重新分類的本機測資及實測結果。
 - [架構與幾何規則](docs/architecture.md)：修改 Schema、Resolver、Cropper 或串接 Python API 前閱讀，包含座標、像素邊界、驗證及錯誤處理的完整定義。
 - [後續開發方向](docs/roadmap.md)：規劃 GUI 校準、辨識、Inventory 與 Capture／Tracking 時閱讀；這些未實作模組必須沿用目前的 Layout 邊界與職責分工。
 - [測試資料說明](tests/fixtures/README.md)：新增合成測試或本機截圖時閱讀，說明哪些資料可進 Git、哪些只保留在本機。
