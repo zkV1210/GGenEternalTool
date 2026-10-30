@@ -1,10 +1,61 @@
 # GGET Account Scanner
 
-《SD 鋼彈 G 世代永恆》（SD Gundam G Generation ETERNAL）的**帳號資料擷取與 AI 諮詢工具**（規劃中）。
+《SD 鋼彈 G 世代永恆》（SD Gundam G Generation ETERNAL）的**帳號資料擷取與 AI 諮詢工具**，目前已建立 Layout 解析與單張圖片裁切原型。
 
 本專案希望讓玩家不必手動逐台登記機體：先把遊戲畫面轉換成可檢查、可修改的帳號資料，再交給 LLM，根據實際持有內容討論配隊、養成資源、交換與抽卡選擇。
 
-> **專案狀態：早期規劃／原型階段。** 以下描述的是預定工作流程，不代表相關功能已實作。
+> **專案狀態：幾何處理與本地 Catalog 原型。** 已實作 Layout JSON 載入與驗證、網格展開、矩形／透視裁切、Debug Overlay 及 CLI，以及 Catalog Schema、查詢、驗證、離線匯入與可續跑的公開資料／圖片抓取工具。機體辨識、OCR、Inventory JSON、模擬器控制與 LLM 功能尚未實作。
+
+## 目前可用：Layout 與單張圖片裁切
+
+程式只按照明確提供的 Layout 處理單張圖片，不會猜測手機比例、卡片位置或排數。相同圖片與設定會得到相同結果；輸入圖片與 Layout 不會被修改。
+
+### 安裝與測試
+
+需要 Python 3.11 以上；建議使用 Python 3.13。依賴為 NumPy 與 OpenCV headless，開發測試使用 pytest。以下為 Windows PowerShell 指令，使用已安裝的 [uv](https://docs.astral.sh/uv/pip/environments/) 建立環境：
+
+```powershell
+uv venv --python 3.13 .venv
+uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
+.venv/Scripts/python.exe -m pytest
+```
+
+完成安裝後即可執行上述測試指令。虛擬環境、快取與輸出不納入 Git。
+
+### 裁切與檢查位置
+
+```powershell
+.venv/Scripts/gget-scan.exe path/to/screenshot.png data/profiles/sample_grid.json --output outputs/my_scan
+```
+
+`sample_grid.json` 是 **1920×1080 比例的格式示範**，不是通用遊戲座標。請依實際圖片調整 JSON；有效畫面比例不同時程式會明確報錯。
+
+每次請使用新的輸出目錄，程式不會覆寫既有內容。成功後會得到：
+
+- `card_000_r0_c0.png` 等卡片圖片，按逐排順序編號，行列及索引皆從 0 開始。
+- `overlay.png`：卡片邊界、頂點、索引與行列編號。
+- `manifest.json`：本次幾何裁切的座標、尺寸、狀態與檔名；這不是未來的 Inventory 匯出格式。
+
+預設採外接矩形裁切。需要四邊形校正時使用 `--mode perspective`，可另以 `--output-size 200 400` 指定寬、高；未指定時依對邊長度估算。其他選項包含 `--viewport LEFT TOP RIGHT BOTTOM`、`--hide-vertices`、`--hide-indices`、`--hide-row-column`、`--hide-grid`。
+
+### 本機真實截圖
+
+本機截圖放在 `tests/fixtures/private/Test.png`，已加入忽略規則，不納入 Git。`data/profiles/test_screenshot.json` 是這張 **2388×1668** 截圖的手動校準設定，只選取前兩排、每排 8 張卡片；不是自動偵測的結果，也不保證適用其他截圖。
+
+```powershell
+.venv/Scripts/gget-scan.exe tests/fixtures/private/Test.png data/profiles/test_screenshot.json --output outputs/my_test_bbox
+.venv/Scripts/gget-scan.exe tests/fixtures/private/Test.png data/profiles/test_screenshot.json --mode perspective --output outputs/my_test_perspective
+```
+
+自動測試使用程式產生的合成圖片，不需要遊戲素材。若本機私有截圖存在，會額外執行真實圖片裁切測試；沒有圖片則略過該項。
+
+### 文件入口
+
+- [main baseline 與 worktree 協作](docs/baseline.md)：確認此次待提交內容、驗證結果及本機資料邊界時閱讀；baseline Commit 獲准完成後，依此建立各功能的獨立分支與環境。
+- [本地機體識別 Catalog](docs/catalog.md)：建立或查詢機體 JSON 時閱讀，包含掛機啟動指令、英文進度 log、停止與續跑規則、圖片對應、離線匯入及來源限制；與 Layout／Cropper 獨立。
+- [架構與幾何規則](docs/architecture.md)：修改 Schema、Resolver、Cropper 或串接 Python API 前閱讀，包含座標、像素邊界、驗證及錯誤處理的完整定義。
+- [後續開發方向](docs/roadmap.md)：規劃 GUI 校準、辨識、Inventory 與 Capture／Tracking 時閱讀；這些未實作模組必須沿用目前的 Layout 邊界與職責分工。
+- [測試資料說明](tests/fixtures/README.md)：新增合成測試或本機截圖時閱讀，說明哪些資料可進 Git、哪些只保留在本機。
 
 ## 預計工作流程
 

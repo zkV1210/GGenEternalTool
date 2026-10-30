@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "profile_id": "test_screenshot_2388x1668",
+  "coordinate_system": {
+    "type": "normalized_integer",
+    "scale": 10000,
+    "point_order": ["TL", "TR", "BR", "BL"]
+  },
+  "screen": {"reference_size": [2388, 1668]},
+  "grid": {
+    "rows": 2,
+    "columns": 8,
+    "first_card": [[1745, 1030], [2655, 1030], [2655, 3530], [1745, 3530]],
+    "horizontal_step": [990, 0],
+    "vertical_step": [0, 2700]
+  }
+}

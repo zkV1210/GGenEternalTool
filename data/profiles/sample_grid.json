@@ -1,0 +1,17 @@
+{
+  "schema_version": 1,
+  "profile_id": "example_grid",
+  "coordinate_system": {
+    "type": "normalized_integer",
+    "scale": 10000,
+    "point_order": ["TL", "TR", "BR", "BL"]
+  },
+  "screen": {"reference_size": [1920, 1080]},
+  "grid": {
+    "rows": 2,
+    "columns": 8,
+    "first_card": [[1000, 1000], [1800, 1000], [1800, 3300], [1000, 3300]],
+    "horizontal_step": [1000, 0],
+    "vertical_step": [0, 2700]
+  }
+}

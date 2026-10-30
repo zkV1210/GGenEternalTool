@@ -1,1 +1,27 @@
+# Local agent instructions and private screenshots
 /AGENTS.md
+/Test.png
+/tests/fixtures/private/
+
+# Generated images, research backups and downloaded source assets
+/outputs/
+/data/local_assets/
+
+# Each worktree owns its environment; nested worktrees are not source files
+/.worktrees/
+
+# Local environment secrets; example files may be versioned
+.env
+.env.*
+!.env.example
+!.env.template
+
+# Python environments, caches and package/build metadata
+/.uv-cache/
+/.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+/build/
+/dist/
