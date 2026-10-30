@@ -146,7 +146,7 @@ def _horizontal_edges(image: ImageFeatures, left: int, right: int,
     left, right, top, bottom = max(0, left), min(w, right), max(0, top), min(h, bottom)
     if top >= bottom or left >= right:
         return []
-    # A small band absorbs frame thickness, compression and sloped corner cuts.
+    # Keep nearby horizontal responses distinct; tolerance belongs in validation.
     projection = image.horizontal[top:bottom, left:right].mean(axis=1)
     return [top + p for p in _peaks(projection, .45, max(2, round((right - left) * .025)))]
 
@@ -183,11 +183,14 @@ def _spanning_line(image: ImageFeatures, y: int) -> bool:
 def _gap_support(image: ImageFeatures, left: int, right: int, y: int) -> list[float]:
     width = right - left
     radius = max(2, round(width * .025))
+    # A nearby floor/toolbar line is not the card's bottom. Unlike frame
+    # coverage, continuation through a gap must be at the same Y coordinate.
+    y_radius = max(1, round(width * .005))
     gaps = []
     for a, b in ((left - round(width * .3), left - radius),
                  (right + radius, right + round(width * .3))):
         if 0 <= a < b <= image.gray.shape[1]:
-            gaps.append(float(image.horizontal[max(0, y - radius):y + radius + 1, a:b].max(axis=0).mean()))
+            gaps.append(float(image.horizontal[max(0, y - y_radius):y + y_radius + 1, a:b].max(axis=0).mean()))
     return gaps
 
 
@@ -238,8 +241,7 @@ def detect_card(image: ImageFeatures, search_roi: Bounds,
                             continue
                         score = (sum(support) - 2 * abs(cw / (y1 - y0) - .5)
                                  - (abs(y1 - vbottom) + abs(y0 - vtop)) / cw
-                                 - (1 if _spanning_line(image, y1) else 0)
-                                 - (1 if _spanning_line(image, y0) else 0))
+                                 - (1 if _spanning_line(image, y1) else 0))
                         if reference and reference.bounds:
                             score -= (abs(cw / reference.width - 1)
                                       + abs((y1 - y0) / (reference.bottom - reference.top) - 1))
@@ -248,13 +250,15 @@ def detect_card(image: ImageFeatures, search_roi: Bounds,
                             score -= 1
                         candidates.append((c, score))
     if candidates:
-        # Select the first row, then favor its outer, continuously supported frame.
-        first_top = min(c.visible_top for c, _ in candidates)
-        row = [(c, s) for c, s in candidates if c.visible_top <= first_top + c.width * .25]
-        best = max(s for _, s in row)
-        row = [(c, s) for c, s in row if s >= best - .25]
-        first_left = min(c.left for c, _ in row)
-        row = [(c, s) for c, s in row if c.left <= first_left + c.width * .12]
+        # Establish the first column from strong frames before choosing a row.
+        # Otherwise artwork in a clipped row's second column can win by appearing
+        # earlier, even though the next row provides a reliable first-column frame.
+        best = max(s for _, s in candidates)
+        strong = [(c, s) for c, s in candidates if s >= best - .25]
+        first_left = min(c.left for c, _ in strong)
+        column = [(c, s) for c, s in strong if c.left <= first_left + c.width * .12]
+        first_top = min(c.visible_top for c, _ in column)
+        row = [(c, s) for c, s in column if c.visible_top <= first_top + c.width * .25]
         chosen = max(row, key=lambda cs: cs[1])[0]
         earlier = [p for p in partials if abs(p.left - chosen.left) < chosen.width * .1
                    and abs(p.width / chosen.width - 1) < .12
@@ -289,11 +293,15 @@ def validate_card(image: ImageFeatures, candidate: Candidate,
     if _spanning_line(image, bottom):
         return reject("bottom is a screen-spanning UI separator")
     radius = max(2, round(cw * .025))
+    extensions = []
     for x in (left, right):
         extension = image.vertical[bottom + radius:min(h, bottom + round(cw * .2)),
                                    max(0, x - radius):x + radius + 1]
-        if extension.size and extension.max(axis=1).mean() > .75:
-            return reject("side continues past the proposed bottom")
+        extensions.append(float(extension.max(axis=1).mean()) if extension.size else 0.)
+    # Background edges may align with one side after a genuine corner ends.
+    # A false internal horizontal boundary leaves both frame sides continuing.
+    if min(extensions) > .75:
+        return reject("both sides continue past the proposed bottom")
     # Card corners can be bevelled; a join must exist in each corner neighborhood.
     radius = max(3, round(cw * .15))
     for x in (left, right):
@@ -372,14 +380,47 @@ def expand_grid(image: ImageFeatures, validated_card: Candidate,
             x = min(nearby, key=lambda x: abs(x - predicted))
             slopes.append((x - c.left) / column)
     if slopes:
-        step = float(np.median(slopes))
-    cards = []
+        refined = float(np.median(slopes))
+        radius = max(1, round(c.width * .01))
+        def alignment(period):
+            score = 0.
+            for column in range(8):
+                for side in (0, c.width):
+                    x = round(column * period) + side
+                    if x < len(projection):
+                        score += float(projection[max(0, x - radius):x + radius + 1].max())
+            return score
+        # A nearby artwork peak must not make the whole-row alignment worse.
+        if alignment(refined) >= alignment(step):
+            step = refined
+    positions = []
     for column in range(8):
         x = round(c.left + column * step)
         if x + c.width >= w:
             break
-        candidate = Candidate(x, x + c.width, c.top, c.bottom, c.top, c.bottom)
-        result = validate_card(image, candidate, c)
-        if result.valid:
-            cards.append((column, candidate, result))
-    return GridRow(tuple(cards), step)
+        positions.append((column, x))
+    # Glow can make the baseline choose a nearby horizontal response. Compare
+    # observed ends in a narrow neighborhood using evidence from the whole row;
+    # never derive a bottom from top + expected height.
+    radius = max(2, round(c.width * .06))
+    bottoms = {c.bottom}
+    for _, x in positions:
+        bottoms.update(_horizontal_edges(image, x, x + c.width,
+                                         c.bottom - radius, c.bottom + radius + 1))
+    best_cards, best_score = (), (-1, -float('inf'))
+    for bottom in sorted(bottoms):
+        cards = []
+        for column, x in positions:
+            candidate = Candidate(x, x + c.width, c.top, bottom, c.top, bottom)
+            result = validate_card(image, candidate, c)
+            if result.valid:
+                cards.append((column, candidate, result))
+        # Keep column zero as the measured row baseline; avoid a correction that
+        # gains other cards by discarding the reference card itself.
+        if not cards or cards[0][0] != 0:
+            continue
+        score = (len(cards), sum(v.support[3] for _, _, v in cards)
+                 - abs(bottom - c.bottom) / c.width)
+        if score > best_score:
+            best_cards, best_score = tuple(cards), score
+    return GridRow(best_cards, step)

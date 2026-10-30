@@ -63,6 +63,8 @@ def test_cli_split_layouts_preserve_original_columns(tmp_path):
 def test_private_screenshot_against_visually_checked_frame_bounds(scale, jpeg):
     path = Path(__file__).parent / 'fixtures/private/Test.png'
     if not path.exists():
+        path = path.with_name('Test_UR.png')
+    if not path.exists():
         pytest.skip('Optional private screenshot is unavailable')
     image = cv2.imdecode(np.frombuffer(path.read_bytes(), np.uint8), 1)
     if image.shape[:2] != (1668, 2388):
@@ -86,3 +88,43 @@ def test_private_screenshot_against_visually_checked_frame_bounds(scale, jpeg):
         union = ((actual[2] - actual[0]) * (actual[3] - actual[1])
                  + (expected[2] - expected[0]) * (expected[3] - expected[1]) - intersection)
         assert intersection / union > (.94 if scale == 1. and not jpeg else .90)
+
+
+# Visually checked structural frames, not glow. Pixel annotations are test-only;
+# the detector receives just the source image, never its name or these positions.
+PRIVATE_ROW_BOUNDS = {
+    'Test_SR': ((178, 572), (630, 1022)),
+    'Test_SSR': ((178, 572), (630, 1022)),
+    'Test_UR': ((178, 572), (630, 1022)),
+    'Test_SR_touch_top': ((152, 544), (602, 994)),
+    'Test_SSR_touch_top': ((152, 544), (602, 994)),
+    'Test_UR_touch_top': ((152, 544), (602, 994)),
+    'Test_SR_cut_top': ((366, 760), (816, 1210)),
+    'Test_SSR_cut_top': ((343, 738), (793, 1187)),
+    'Test_UR_cut_top': ((380, 774), (830, 1224)),
+}
+
+
+@pytest.mark.parametrize('stem', PRIVATE_ROW_BOUNDS)
+def test_nine_private_screenshots_match_annotated_rows(stem):
+    path = Path(__file__).parent / 'fixtures/private' / f'{stem}.png'
+    if not path.exists():
+        pytest.skip(f'Optional private {path.name} is unavailable')
+    image = cv2.imdecode(np.frombuffer(path.read_bytes(), np.uint8), 1)
+    assert image.shape[:2] == (1668, 2388), 'Annotations require the original screenshot'
+    result = auto_scan(image)
+    assert len(result.crops) == 16
+    start_row = 1 if stem.endswith('_cut_top') else 0
+    assert [(c.card.row, c.card.column) for c in result.crops] == [
+        (r, c) for r in range(start_row, start_row + 2) for c in range(8)]
+    assert len(result.attempts) == start_row + 2
+    if start_row:
+        assert not result.attempts[0].validation.valid
+    for crop in result.crops:
+        l, t, r, b = crop.card.bounds
+        top, bottom = PRIVATE_ROW_BOUNDS[stem][crop.card.row - start_row]
+        left = 432 + 236 * crop.card.column
+        right = left + 192
+        intersection = max(0, min(r, right) - max(l, left)) * max(0, min(b, bottom) - max(t, top))
+        union = (r - l) * (b - t) + (right - left) * (bottom - top) - intersection
+        assert intersection / union > .90, (stem, crop.card.row, crop.card.column, crop.card.bounds)

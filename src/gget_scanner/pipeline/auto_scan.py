@@ -121,7 +121,9 @@ def auto_scan(image: np.ndarray) -> AutoScanResult:
     except LayoutError as exc:
         error = str(exc)
     if anchor:
-        roi = (anchor[0], anchor[1] + max(3, round(height * .006)),
+        # A complete card can touch the list line; excluding a fixed band loses
+        # its observed top. Aspect and bottom evidence distinguish clipped rows.
+        roi = (anchor[0], anchor[1],
                min(anchor[2], anchor[0] + round(width * .18)),
                min(height, anchor[1] + round(height * .6)))
         reference, grid_reference = None, None

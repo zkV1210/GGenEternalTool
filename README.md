@@ -25,14 +25,23 @@ uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
 ### 自動定位與產生 Layout
 
 ```powershell
-.venv/Scripts/gget-auto-scan.exe tests/fixtures/private/Test.png --output outputs/auto_scan_001
+.venv/Scripts/gget-auto-scan.exe tests/fixtures/private/Test_UR.png --output outputs/auto_scan_001
 ```
 
 從列表上方水平白線起始，偵測第一張卡片外框，再估計水平週期並逐張驗證，最多 8 欄、兩列完整卡片。若初始列不完整，跳過後最多檢查到第三列；第二列也不完整就停止。底邊必須有影像證據，不以預估高度補齊。
 
 輸出到新的目錄，包含卡片 PNG、`overlay.png`、`manifest.json` 及現有 Schema v1 的 `layout.json`。若有被拒絕的位置或各列不能共用同一網格，改為多份 `layout_000.json` 等檔案；manifest 保留原始列欄、各邊支持度及 Layout 對應。支持度是邊緣覆蓋比例，不是辨識正確率。無有效卡片時仍輸出診斷圖與 manifest，退出碼為 1，不產生 Layout。
 
-目前真實驗證僅涵蓋本機 2388×1668 截圖及其縮放／JPEG 版本。原圖與 0.65、1.3 倍縮放各取得 16 張；JPEG 品質 70 取得 15～16 張，部分弱邊框會被保守拒絕。1536×710、3120×1440、1536×1073 三種裝置原始截圖目前缺少，尚不能宣稱已驗證跨裝置版面。演算法與限制詳見 [架構文件](docs/architecture.md#自動卡片定位)。
+目前真實驗證涵蓋本機 9 張 2388×1668 截圖：SR／SSR／UR 各有一般、`touch_top`（貼近列表白線）、`cut_top`（初始列頂部被裁）三種情況。每張皆取得 16 張卡片，共 144 張，與目視標註結構外框比較最低 IoU 大於 0.91。`cut_top` 會跳過第一列並保留第二、第三列，不把裁切列當成完整卡片。原始 UR 截圖另測試 0.65／1.3 倍縮放與 JPEG 品質 70，壓縮圖允許保守漏掉 1 張。1536×710、3120×1440、1536×1073 三種裝置原始截圖仍缺少，尚不能宣稱已驗證跨裝置版面。演算法與限制詳見 [架構文件](docs/architecture.md#自動卡片定位)。
+
+本次九張實測輸出位於 `outputs/Test_SR/`、`outputs/Test_SR_touch_top/`、`outputs/Test_SR_cut_top/` 等同名資料夾；包含卡片 PNG、Overlay、Layout 與 manifest。本機另外保留 `cards_overview.png` 供逐張目視確認，以及 `outputs/nine_results.md` 實測表；這些檢查產物均不納入 Git。需要重新批次執行時，請選用新的輸出根目錄，既有結果不會被覆寫：
+
+```powershell
+$scanOutputRoot = 'outputs/scan_002'
+Get-ChildItem tests/fixtures/private/Test_*.png | ForEach-Object {
+    .venv/Scripts/gget-auto-scan.exe $_.FullName --output (Join-Path $scanOutputRoot $_.BaseName)
+}
+```
 
 ### 裁切與檢查位置
 
@@ -52,11 +61,11 @@ uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
 
 ### 本機真實截圖
 
-本機截圖放在 `tests/fixtures/private/Test.png`，已加入忽略規則，不納入 Git。`data/profiles/test_screenshot.json` 是這張 **2388×1668** 截圖的手動校準設定，只選取前兩排、每排 8 張卡片；不是自動偵測的結果，也不保證適用其他截圖。
+本機原始截圖現名為 `tests/fixtures/private/Test_UR.png`（原 `Test.png`，SHA-256 相同），已加入忽略規則，不納入 Git。`data/profiles/test_screenshot.json` 是這張 **2388×1668** 截圖的手動校準設定，只選取前兩排、每排 8 張卡片；不是自動偵測的結果，也不保證適用其他截圖。
 
 ```powershell
-.venv/Scripts/gget-scan.exe tests/fixtures/private/Test.png data/profiles/test_screenshot.json --output outputs/my_test_bbox
-.venv/Scripts/gget-scan.exe tests/fixtures/private/Test.png data/profiles/test_screenshot.json --mode perspective --output outputs/my_test_perspective
+.venv/Scripts/gget-scan.exe tests/fixtures/private/Test_UR.png data/profiles/test_screenshot.json --output outputs/my_test_bbox
+.venv/Scripts/gget-scan.exe tests/fixtures/private/Test_UR.png data/profiles/test_screenshot.json --mode perspective --output outputs/my_test_perspective
 ```
 
 自動測試使用程式產生的合成圖片，不需要遊戲素材。若本機私有截圖存在，會額外執行真實圖片裁切測試；沒有圖片則略過該項。

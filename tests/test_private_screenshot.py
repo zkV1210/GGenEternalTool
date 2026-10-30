@@ -16,6 +16,8 @@ def test_private_screenshot(mode):
     root = Path(__file__).resolve().parents[1]
     path = root / "tests/fixtures/private/Test.png"
     if not path.exists():
+        path = path.with_name("Test_UR.png")
+    if not path.exists():
         pytest.skip("Optional private Test.png is not available")
     source = path.read_bytes()
     image = cv2.imdecode(np.frombuffer(source, dtype=np.uint8), cv2.IMREAD_UNCHANGED)

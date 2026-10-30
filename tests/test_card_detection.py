@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from gget_scanner.image.card_detection import (
-    Candidate, detect_anchor, detect_card, prepare_image, validate_card,
+    Candidate, detect_anchor, detect_card, expand_grid, prepare_image, validate_card,
 )
 from gget_scanner.pipeline.auto_scan import auto_scan
 
@@ -24,7 +24,7 @@ def make_screen(first_top=80, rows=2, columns=8, overlay_y=None, missing=()):
             cv2.line(image, (x + 12, y + 25), (x + 78, y + 145), (190, 210, 240), 3)
             cv2.line(image, (x + 10, y + 145), (x + 85, y + 145), color, 2)
             boxes[row, column] = (x, y, x + 95, y + 190)
-    image[:65] = 22  # Scrolling clips the first row at the list viewport.
+    image[:57] = 22  # Scrolling clips the first row at the list viewport.
     cv2.line(image, (150, 55), (1150, 55), (170, 170, 170), 2)
     cv2.line(image, (20, 32), (400, 32), (240, 240, 240), 2)  # Header distractor.
     if overlay_y:
@@ -90,6 +90,43 @@ def test_expected_height_without_bottom_is_rejected():
     validation = validate_card(prepare_image(image), Candidate(100, 200, 60, 320, 60, 260))
     assert not validation.valid
     assert not validate_card(features, Candidate(100, 200, 60, 320, 60, 260)).valid
+
+
+def test_complete_card_can_touch_list_separator():
+    image, boxes = make_screen(first_top=57)
+    result = auto_scan(image)
+    assert len(result.crops) == 16
+    assert len(result.attempts) == 2
+    for crop in result.crops:
+        assert_close(crop.card.bounds, boxes[crop.card.row, crop.card.column])
+
+
+def test_nearby_separator_is_not_the_observed_card_bottom():
+    image, _ = make_screen(rows=1)
+    cv2.line(image, (150, 277), (1150, 277), (220, 220, 220), 2)
+    c = Candidate(180, 275, 80, 270, 80, 270)
+    assert validate_card(prepare_image(image), c).valid
+
+
+def test_one_background_side_can_continue_after_a_genuine_bottom():
+    image = np.zeros((400, 500, 3), np.uint8)
+    cv2.rectangle(image, (100, 60), (200, 260), (230, 230, 230), 2)
+    cv2.line(image, (200, 260), (200, 320), (230, 230, 230), 2)
+    c = Candidate(100, 200, 60, 260, 60, 260)
+    assert validate_card(prepare_image(image), c).valid
+
+
+def test_grid_uses_observed_row_bottom_instead_of_baseline_glow():
+    image, _ = make_screen(rows=1)
+    # Separate the first card's glow from the other cards' Sobel boundary band.
+    cv2.line(image, (180, 278), (275, 278), (200, 200, 200), 2)
+    features = prepare_image(image)
+    glow = Candidate(180, 275, 80, 270, 80, 278)
+    assert validate_card(features, glow).valid
+    grid = expand_grid(features, glow)
+    assert len(grid.cards) == 8
+    # Gaussian/Sobel response plus the validation band permits five pixels here.
+    assert all(c.bottom < glow.bottom and abs(c.bottom - 270) <= 5 for _, c, _ in grid.cards)
 
 
 def test_missing_slot_is_not_filled_or_renumbered():
