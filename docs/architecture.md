@@ -55,6 +55,18 @@ CLI 不覆寫既有目錄。無卡片時保留 `overlay.png` 與失敗階段／�
 
 OpenCV API 透過 Context7 查閱官方 4.13.0 文件（Sobel、形態學與 HoughLinesP）；Context7 未提供 4.14.0 文件版本，實際執行環境為 OpenCV 4.14.0、NumPy 2.5.4、Python 3.13.16。
 
+## 工作目錄中的幾何 ROI 實驗
+
+以下為相對 `f8cfbe5` 的未提交實驗，沿用既有 Schema 與上述主流程。初始搜尋區為白線兩端之間、白線往下到圖片底部，不再用圖片寬 18%／高 60% 或卡片寬占整張圖的比例限制候選。寬度的下限來自梯度濾波的可分辨範圍，上限來自搜尋區及卡片寬高比的幾何可容納範圍。
+
+`prepare_image()` 量測垂直梯度遮罩橫向連續區段的中位厚度，加入 Gaussian／Sobel 各一像素的足跡作為邊緣半徑。候選側邊配對與斷邊連接改用此半徑；避免放大搜尋區後，寬候選使用過大連接核，把多列拼成一張大卡片。
+
+`edge_tolerance()` 在排除斜切角的側邊取樣，以邊緣半寬、中心偏移及偏移 MAD 的三倍，加上兩像素濾波足跡估計位置誤差。下一列 X 範圍是前一張左右邊各加此誤差，Y 從前一張可見結束處加誤差開始，到圖片底部停止；不預設列間距，也不以可見高度代表完整高度。若沒有任何候選側邊，初始搜尋已涵蓋圖片剩餘範圍，便停止，不再用畫面高度百分比猜下一列位置。
+
+有完整參考卡片時，`detect_card()` 只在參考卡高加減兩倍位置誤差的區間找實際底邊；只有部分側邊時，使用同一寬高比先驗。Pipeline 將已驗證網格的第一張卡片幾何傳給下一列，避免把尚未校正的光暈位置當成高度。最多列數與遇到不完整第二列就停止的規則不變。新增測試涵蓋畫布加寬、增大列間距、缺少幾何時終止，以及不得略過不完整第二列去取第三列。
+
+實驗輸出按 `outputs/<裝置名稱>/geometry_roi/<測資名稱>/` 保存。`scripts/layout_batch.py` 以獨立程序比較已提交基準與工作目錄，36 次測試結果保留在 `outputs/summary.json`；案例的 `run.json` 記錄來源雜湊、退出碼及像素／Layout 核對數，`versions.json` 記錄兩版來源。iPhone 裁切列仍有誤判與原版匯出失敗，輸出數不等於正確卡片數。初始搜尋面積增加會帶來執行成本；Anchor 的上方區域比例、垂直邊緣提取的尺度及既有支持度門檻仍未自適應化，不能把本次結果視為已消除所有經驗常數。
+
 ## Layout Schema v1
 
 完整範例為 [`sample_grid.json`](../data/profiles/sample_grid.json)。必要欄位如下：
@@ -156,7 +168,7 @@ for crop in result.crops:
 
 pytest 以合成圖片驗證 Schema、四邊形、比例、Viewport、取整、8×2 展開、斜向位移、裁切尺寸與逐像素內容、透視方向、不可變性、Overlay 位置、Unicode CLI 與覆寫保護。
 
-本機 `tests/fixtures/private/Test_UR.png`（相容原 `Test.png`）僅作額外驗證；檔案不存在時略過該項，不妨礙公開測試。真實截圖、衍生裁切與 Overlay 均不納入 Git。手動 Profile [`test_screenshot.json`](../data/profiles/test_screenshot.json) 僅描述這張 2388×1668 圖片前兩排的 16 個完整卡片區域，未辨識任何遊戲資料。
+本機 `tests/fixtures/private/IPad/Test_UR.png`（相容舊平面目錄）僅作額外驗證；檔案不存在時略過該項，不妨礙公開測試。真實截圖、衍生裁切與 Overlay 均不納入 Git。手動 Profile [`test_screenshot.json`](../data/profiles/test_screenshot.json) 僅描述這張 2388×1668 圖片前兩排的 16 個完整卡片區域，未辨識任何遊戲資料。
 
 驗證環境：Python 3.13.16、OpenCV 4.14.0、NumPy 2.5.4、pytest 9.2.0。Context7 未提供完全對應的 OpenCV 4.14／NumPy 2.5 文件版本，已查閱鄰近版本官方文件，並以實際安裝版本的執行測試驗證用到的 API；Python 其他版本尚未實測。
 

@@ -65,6 +65,8 @@ def test_private_screenshot_against_visually_checked_frame_bounds(scale, jpeg):
     if not path.exists():
         path = path.with_name('Test_UR.png')
     if not path.exists():
+        path = path.parent / 'IPad' / path.name
+    if not path.exists():
         pytest.skip('Optional private screenshot is unavailable')
     image = cv2.imdecode(np.frombuffer(path.read_bytes(), np.uint8), 1)
     if image.shape[:2] != (1668, 2388):
@@ -108,6 +110,8 @@ PRIVATE_ROW_BOUNDS = {
 @pytest.mark.parametrize('stem', PRIVATE_ROW_BOUNDS)
 def test_nine_private_screenshots_match_annotated_rows(stem):
     path = Path(__file__).parent / 'fixtures/private' / f'{stem}.png'
+    if not path.exists():
+        path = path.parent / 'IPad' / path.name
     if not path.exists():
         pytest.skip(f'Optional private {path.name} is unavailable')
     image = cv2.imdecode(np.frombuffer(path.read_bytes(), np.uint8), 1)

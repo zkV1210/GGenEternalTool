@@ -123,24 +123,24 @@ def auto_scan(image: np.ndarray) -> AutoScanResult:
     if anchor:
         # A complete card can touch the list line; excluding a fixed band loses
         # its observed top. Aspect and bottom evidence distinguish clipped rows.
-        roi = (anchor[0], anchor[1],
-               min(anchor[2], anchor[0] + round(width * .18)),
-               min(height, anchor[1] + round(height * .6)))
-        reference, grid_reference = None, None
+        roi = (anchor[0], anchor[1], anchor[2], height)
+        reference, grid_reference, search_reference = None, None, None
         # Only a rejected initial row allows a third attempt. A rejected second
         # row ends the scan, even when no complete rows have been found.
         for row in range(3):
-            candidate = detect_card(features, roi, reference)
+            candidate = detect_card(features, roi, reference or search_reference)
+            search_reference = candidate
             validation = validate_card(features, candidate, reference) if candidate else None
             attempts.append(RowAttempt(row, roi, candidate, validation))
             if validation and validation.valid:
                 grid = expand_grid(features, candidate, grid_reference)
                 if grid.cards:
                     rows.append((row, grid))
-                    reference, grid_reference = candidate, grid
+                    reference, grid_reference = grid.cards[0][1], grid
+                    search_reference = reference
             if len(rows) == 2 or (row >= 1 and not (validation and validation.valid)):
                 break
-            roi = detect_next_row(features, candidate, roi)
+            roi = detect_next_row(features, search_reference, roi)
             if roi is None:
                 break
     profiles, cards = _export_layout(features, rows)

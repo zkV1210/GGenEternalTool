@@ -7,6 +7,8 @@ import numpy as np
 
 from gget_scanner.config.layout_models import Bounds, LayoutError
 
+CARD_ASPECT_RANGE = (.43, .58)
+
 
 @dataclass(frozen=True)
 class ImageFeatures:
@@ -14,6 +16,7 @@ class ImageFeatures:
     vertical: np.ndarray
     horizontal: np.ndarray
     canny: np.ndarray
+    edge_radius: int
 
 
 @dataclass(frozen=True)
@@ -65,7 +68,12 @@ def prepare_image(image: np.ndarray) -> ImageFeatures:
     threshold = max(35., float(np.percentile(np.maximum(gx, gy), 65)) * .7)
     vertical = ((gx > threshold) & (gx > gy * 1.15)).astype(np.uint8)
     horizontal = ((gy > threshold) & (gy > gx * 1.15)).astype(np.uint8)
-    return ImageFeatures(gray, vertical, horizontal, cv2.Canny(gray, 60, 160))
+    transitions = np.diff(np.pad(vertical, ((0, 0), (1, 1))).astype(np.int8), axis=1)
+    starts = np.nonzero(transitions == 1)[1]
+    ends = np.nonzero(transitions == -1)[1]
+    thickness = float(np.median(ends - starts)) if starts.size else 1.
+    edge_radius = int(np.ceil(thickness / 2)) + 2  # Gaussian + Sobel footprint.
+    return ImageFeatures(gray, vertical, horizontal, cv2.Canny(gray, 60, 160), edge_radius)
 
 
 def detect_anchor(image: ImageFeatures) -> Bounds:
@@ -194,6 +202,30 @@ def _gap_support(image: ImageFeatures, left: int, right: int, y: int) -> list[fl
     return gaps
 
 
+def edge_tolerance(image: ImageFeatures, candidate: Candidate) -> int:
+    """Pixel uncertainty from observed side thickness and robust center scatter."""
+    top = candidate.top if candidate.top is not None else candidate.visible_top
+    bottom = candidate.bottom if candidate.bottom is not None else candidate.visible_bottom
+    inset = round(candidate.width * .12)  # Exclude the existing bevel neighborhoods.
+    top, bottom = top + inset, bottom - inset
+    offsets, half_widths = [], []
+    for x in (candidate.left, candidate.right):
+        radius = max(3, inset)
+        left, right = max(0, x - radius), min(image.gray.shape[1], x + radius + 1)
+        for line in image.vertical[top:bottom, left:right]:
+            runs = np.flatnonzero(np.diff(np.r_[0, line, 0].astype(int)))
+            pairs = list(zip(runs[::2], runs[1::2]))
+            if pairs:
+                a, b = min(pairs, key=lambda ab: abs(left + (ab[0] + ab[1] - 1) / 2 - x))
+                offsets.append(left + (a + b - 1) / 2 - x)
+                half_widths.append((b - a) / 2)
+    if not offsets:
+        return 2  # One-pixel Gaussian radius plus one-pixel Sobel radius.
+    center = float(np.median(offsets))
+    scatter = float(np.median(np.abs(np.asarray(offsets) - center)))
+    return max(2, int(np.ceil(abs(center) + np.median(half_widths) + 3 * scatter + 2)))
+
+
 def detect_card(image: ImageFeatures, search_roi: Bounds,
                 reference: Candidate | None = None) -> Candidate | None:
     """Propose the earliest frame in a bounded strip; missing ends stay unknown."""
@@ -202,23 +234,26 @@ def detect_card(image: ImageFeatures, search_roi: Bounds,
     if not 0 <= left < right <= width or not 0 <= top < bottom <= height:
         raise LayoutError("detection search ROI is outside the image")
     edges = _vertical_edges(image, search_roi)
+    tolerance = edge_tolerance(image, reference) if reference else None
     candidates = []
     partials = []
     for i, x0 in enumerate(edges):
         for x1 in edges[i + 1:]:
             cw = x1 - x0
-            if not width * .025 <= cw <= min(width * .16, height * .32):
+            # Only geometric fit and the filter's resolving power bound width;
+            # no percentage of the full screenshot determines a card's size.
+            if not 2 * image.edge_radius + 1 <= cw <= min(right - left, (bottom - top) * CARD_ASPECT_RANGE[1]):
                 continue
-            if reference and (abs(cw / reference.width - 1) > .15
-                              or abs(x0 - reference.left) > reference.width * .2):
+            if reference and (abs(cw - reference.width) > 2 * tolerance
+                              or abs(x0 - reference.left) > tolerance):
                 continue
             # Both sides must persist over overlapping Y positions.
-            radius = max(2, round(cw * .02))
+            radius = image.edge_radius
             a = image.vertical[top:bottom, max(0, x0 - radius):x0 + radius + 1].max(axis=1)
             b = image.vertical[top:bottom, max(0, x1 - radius):x1 + radius + 1].max(axis=1)
             shared = (a & b).astype(np.uint8).reshape(-1, 1)
             shared = cv2.morphologyEx(shared, cv2.MORPH_CLOSE,
-                                       np.ones((max(3, round(cw * .12)), 1), np.uint8))[:, 0]
+                                       np.ones((2 * radius + 1, 1), np.uint8))[:, 0]
             runs = np.flatnonzero(np.diff(np.r_[0, shared, 0].astype(int)))
             for start, stop in zip(runs[::2], runs[1::2]):
                 if stop - start < cw * .6:
@@ -230,8 +265,14 @@ def detect_card(image: ImageFeatures, search_roi: Bounds,
                 partials.append(Candidate(x0, x1, vtop, vbottom,
                                           tops[0] if tops else None))
                 for y0 in tops:
-                    ends = _horizontal_edges(image, x0, x1, y0 + round(cw * 1.65),
-                                               min(bottom, y0 + round(cw * 2.45)))
+                    if reference and reference.bounds:
+                        expected_height = reference.bottom - reference.top
+                        height_error = 2 * tolerance
+                        low, high = expected_height - height_error, expected_height + height_error
+                    else:
+                        low, high = cw / CARD_ASPECT_RANGE[1], cw / CARD_ASPECT_RANGE[0]
+                    ends = _horizontal_edges(image, x0, x1, y0 + int(np.floor(low)),
+                                               min(bottom, y0 + int(np.ceil(high)) + 1))
                     for y1 in ends:
                         if y1 < vbottom - cw * .06 or y1 > vbottom + cw * .22:
                             continue
@@ -282,7 +323,7 @@ def validate_card(image: ImageFeatures, candidate: Candidate,
     if not (0 < left < right < w - 1 and 0 < top < bottom < h - 1):
         return reject("frame touches image cutoff")
     cw, ch = candidate.width, bottom - top
-    if not .43 <= cw / ch <= .58:
+    if not CARD_ASPECT_RANGE[0] <= cw / ch <= CARD_ASPECT_RANGE[1]:
         return reject("incompatible card aspect ratio")
     if reference and reference.bounds:
         rh = reference.bottom - reference.top
@@ -330,18 +371,16 @@ def detect_next_row(image: ImageFeatures, previous_candidate: Candidate | None,
     """Return exactly one next-row search strip; never recurse or scan to the bottom."""
     h, w = image.gray.shape
     if previous_candidate is None:
-        left, top, right, _ = previous_roi
-        top += max(1, round(h * .12))
-        bottom = min(h, top + round(h * .55))
-    else:
-        c = previous_candidate
-        margin = max(3, round(c.width * .18))
-        left, right = max(0, c.left - margin), min(w, c.right + margin)
-        # Visible side extent is not interpreted as full card height.
-        top = c.bottom if c.bottom is not None else c.visible_bottom
-        top += max(2, round(c.width * .08))
-        bottom = min(h, top + round(c.width * 2.9))
-    return (left, top, right, bottom) if top < bottom else None
+        # Initial detection already examined the Anchor-bounded image remainder.
+        # Without a side pair there is no next-row origin to infer.
+        return None
+    c = previous_candidate
+    margin = edge_tolerance(image, c)
+    left, right = max(0, c.left - margin), min(w, c.right + margin + 1)
+    # No assumed row gap: find the next observed top in this narrow strip, then
+    # detect_card limits its bottom search using measured height (or aspect).
+    top = (c.bottom if c.bottom is not None else c.visible_bottom) + margin
+    return (left, top, right, h) if top < h else None
 
 
 def expand_grid(image: ImageFeatures, validated_card: Candidate,

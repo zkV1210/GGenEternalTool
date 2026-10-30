@@ -25,7 +25,7 @@ uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
 ### 自動定位與產生 Layout
 
 ```powershell
-.venv/Scripts/gget-auto-scan.exe tests/fixtures/private/Test_UR.png --output outputs/auto_scan_001
+.venv/Scripts/gget-auto-scan.exe tests/fixtures/private/IPad/Test_UR.png --output outputs/IPad/geometry_roi/Test_UR
 ```
 
 從列表上方水平白線起始，偵測第一張卡片外框，再估計水平週期並逐張驗證，最多 8 欄、兩列完整卡片。若初始列不完整，跳過後最多檢查到第三列；第二列也不完整就停止。底邊必須有影像證據，不以預估高度補齊。
@@ -34,14 +34,13 @@ uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
 
 目前真實驗證涵蓋本機 9 張 2388×1668 截圖：SR／SSR／UR 各有一般、`touch_top`（貼近列表白線）、`cut_top`（初始列頂部被裁）三種情況。每張皆取得 16 張卡片，共 144 張，與目視標註結構外框比較最低 IoU 大於 0.91。`cut_top` 會跳過第一列並保留第二、第三列，不把裁切列當成完整卡片。原始 UR 截圖另測試 0.65／1.3 倍縮放與 JPEG 品質 70，壓縮圖允許保守漏掉 1 張。1536×710、3120×1440、1536×1073 三種裝置原始截圖仍缺少，尚不能宣稱已驗證跨裝置版面。演算法與限制詳見 [架構文件](docs/architecture.md#自動卡片定位)。
 
-本次九張實測輸出位於 `outputs/Test_SR/`、`outputs/Test_SR_touch_top/`、`outputs/Test_SR_cut_top/` 等同名資料夾；包含卡片 PNG、Overlay、Layout 與 manifest。本機另外保留 `cards_overview.png` 供逐張目視確認，以及 `outputs/nine_results.md` 實測表；這些檢查產物均不納入 Git。需要重新批次執行時，請選用新的輸出根目錄，既有結果不會被覆寫：
+私有測資按 `tests/fixtures/private/<裝置名稱>/*.png` 分組。批次工具將兩版結果放到 `outputs/<裝置名稱>/<算法版本>/<測資名稱>/`：`baseline_f8cfbe5` 使用已提交版本，`geometry_roi` 使用目前工作目錄。每次由獨立子程序載入指定算法，不切換 Git 分支、不覆蓋來源碼。案例目錄包含成功產物及 `run.json`／`run.log`，裁切圖另核對原圖像素與重載 Layout；失敗保留錯誤資訊。`outputs/README.md` 連到各裝置比較表與定位總覽，`versions.json` 記錄 commit 與新版來源雜湊。所有輸出皆不納入 Git。重跑請選用新的根目錄：
 
 ```powershell
-$scanOutputRoot = 'outputs/scan_002'
-Get-ChildItem tests/fixtures/private/Test_*.png | ForEach-Object {
-    .venv/Scripts/gget-auto-scan.exe $_.FullName --output (Join-Path $scanOutputRoot $_.BaseName)
-}
+.venv/Scripts/python.exe -m scripts.layout_batch --output outputs/scan_002
 ```
+
+工作目錄另有**尚未提交的幾何搜尋範圍實驗版**，對照基準為 `f8cfbe5`。初始 ROI 使用白線端點及圖片底部；有卡片幾何後，以實測側邊厚度與位置偏差建立下一列搜尋帶，再用已驗證卡高或 1:2 比例先驗限制底邊搜尋。這版移除 ROI 的畫面百分比限制，但 Anchor 偵測、垂直線投影及驗證仍有既有門檻。兩個裝置各九張、兩版共 36 次實測中，iPad 皆取得 16 張；iPhone 的裁切列仍有誤判，原版另有兩次 Layout 匯出失敗。比較表的 `ok` 僅代表執行成功，不代表框選正確。
 
 ### 裁切與檢查位置
 
@@ -61,11 +60,11 @@ Get-ChildItem tests/fixtures/private/Test_*.png | ForEach-Object {
 
 ### 本機真實截圖
 
-本機原始截圖現名為 `tests/fixtures/private/Test_UR.png`（原 `Test.png`，SHA-256 相同），已加入忽略規則，不納入 Git。`data/profiles/test_screenshot.json` 是這張 **2388×1668** 截圖的手動校準設定，只選取前兩排、每排 8 張卡片；不是自動偵測的結果，也不保證適用其他截圖。
+本機原始截圖現名為 `tests/fixtures/private/IPad/Test_UR.png`（原 `Test.png`，SHA-256 相同），已加入忽略規則，不納入 Git。`data/profiles/test_screenshot.json` 是這張 **2388×1668** 截圖的手動校準設定，只選取前兩排、每排 8 張卡片；不是自動偵測的結果，也不保證適用其他截圖。
 
 ```powershell
-.venv/Scripts/gget-scan.exe tests/fixtures/private/Test_UR.png data/profiles/test_screenshot.json --output outputs/my_test_bbox
-.venv/Scripts/gget-scan.exe tests/fixtures/private/Test_UR.png data/profiles/test_screenshot.json --mode perspective --output outputs/my_test_perspective
+.venv/Scripts/gget-scan.exe tests/fixtures/private/IPad/Test_UR.png data/profiles/test_screenshot.json --output outputs/my_test_bbox
+.venv/Scripts/gget-scan.exe tests/fixtures/private/IPad/Test_UR.png data/profiles/test_screenshot.json --mode perspective --output outputs/my_test_perspective
 ```
 
 自動測試使用程式產生的合成圖片，不需要遊戲素材。若本機私有截圖存在，會額外執行真實圖片裁切測試；沒有圖片則略過該項。

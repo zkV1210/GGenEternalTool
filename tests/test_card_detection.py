@@ -5,7 +5,8 @@ import numpy as np
 import pytest
 
 from gget_scanner.image.card_detection import (
-    Candidate, detect_anchor, detect_card, expand_grid, prepare_image, validate_card,
+    Candidate, detect_anchor, detect_card, detect_next_row, edge_tolerance,
+    expand_grid, prepare_image, validate_card,
 )
 from gget_scanner.pipeline.auto_scan import auto_scan
 
@@ -76,7 +77,58 @@ def test_toolbar_does_not_supply_a_missing_bottom(first_top, overlay_y, expected
     image, _ = make_screen(first_top=first_top, rows=3, overlay_y=overlay_y)
     result = auto_scan(image)
     assert len(result.crops) == expected
+    # With no geometry anywhere below the Anchor, the initial full-region search
+    # can terminate immediately; otherwise exactly one next row is examined.
+    assert len(result.attempts) == (2 if result.attempts[0].candidate else 1)
+
+
+def test_bootstrap_card_size_does_not_depend_on_canvas_width():
+    source, boxes = make_screen(rows=1)
+    wide = np.full((800, 4800, 3), 22, np.uint8)
+    wide[:, :1200] = source
+    roi = (150, 55, 1150, 800)
+    a = detect_card(prepare_image(source), roi)
+    b = detect_card(prepare_image(wide), roi)
+    assert a is not None and b is not None
+    assert a.bounds == b.bounds
+    assert_close(b.bounds, boxes[0, 0])
+
+
+def test_next_row_has_no_assumed_screen_fraction_or_row_gap():
+    source, boxes = make_screen(rows=1)
+    image = np.full((1200, 1200, 3), 22, np.uint8)
+    image[:800] = source
+    image[700:891, 180:1106] = source[80:271, 180:1106]
+    result = auto_scan(image)
+    assert len(result.crops) == 16
     assert len(result.attempts) == 2
+    assert result.attempts[0].roi == (*result.anchor[:2], result.anchor[2], 1200)
+    assert result.attempts[1].roi[3] == 1200
+    for crop in result.crops:
+        expected = boxes[0, crop.card.column]
+        if crop.card.row == 1:
+            expected = (expected[0], 700, expected[2], 890)
+        assert_close(crop.card.bounds, expected)
+
+
+def test_next_row_requires_observed_geometry_and_uses_measured_tolerance():
+    image, _ = make_screen(rows=1)
+    features = prepare_image(image)
+    assert detect_next_row(features, None, (150, 55, 1150, 800)) is None
+    c = Candidate(180, 275, 80, 270, 80, 270)
+    tolerance = edge_tolerance(features, c)
+    assert detect_next_row(features, c, (150, 55, 1150, 800)) == (
+        c.left - tolerance, c.bottom + tolerance, c.right + tolerance + 1, 800)
+
+
+def test_wide_next_row_search_does_not_skip_an_incomplete_second_row():
+    image, _ = make_screen(rows=3)
+    image[310:350, 150:1150] = 22
+    result = auto_scan(image)
+    assert len(result.crops) == 8
+    assert {c.card.row for c in result.crops} == {0}
+    assert len(result.attempts) == 2
+    assert not result.attempts[1].validation.valid
 
 
 def test_expected_height_without_bottom_is_rejected():
