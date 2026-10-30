@@ -18,4 +18,4 @@ AEE5F89B0B8010FB837FA3C5C933508A68EDFF4FDB355974066FCE5867582A65
 
 九張原始私有測資皆為 2388×1668：`Test_SR`、`Test_SSR`、`Test_UR` 各有無後綴、`_touch_top`、`_cut_top` 三種 PNG。`test_nine_private_screenshots_match_annotated_rows` 驗證每張各 16 個框、正確來源列欄及每個框 IoU 大於 0.90；`cut_top` 預期跳過初始列，輸出第 1、2 列。個別檔案缺少時只略過相應案例。
 
-以 `python -m scripts.layout_batch` 重跑兩個算法、兩個裝置的 36 個案例，輸出按 `outputs/<裝置名稱>/<算法版本>/<測資名稱>/` 分類。原有平面輸出已清除。成功案例含卡片、Overlay、Layout、manifest 與卡片總覽；失敗保留 run.json／run.log。總入口為 `outputs/README.md`。批次測試確認輸出像素與重載 Layout 一致；框選是否正確仍需獨立人工驗證，尤其 iPhone 裁切列存在誤判。測資與輸出均不加入 Git。
+以 `python -m scripts.layout_batch` 比較 baseline、v1、v2 與兩個裝置，各九張共 54 個案例；可用 `--versions v2` 只新增新版。輸出依 `outputs/<裝置>/<版本>/<測資>/` 分類。成功案例含卡片、Overlay、Layout、manifest 與總覽；失敗保留 run.json／run.log。總入口為 `outputs/README.md`。批次工具核對像素及重載 Layout，不等於人工確認框選正確。v2 測試重點是八張整列、預設第二列位置與右下遮擋整列停用；不再要求五欄／缺欄輸出，也不要求第二列獨立搜尋整個垂直範圍。測資與輸出均不加入 Git。

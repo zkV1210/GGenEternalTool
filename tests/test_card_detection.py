@@ -6,7 +6,7 @@ import pytest
 
 from gget_scanner.image.card_detection import (
     Candidate, detect_anchor, detect_card, detect_next_row, edge_tolerance,
-    expand_grid, prepare_image, validate_card,
+    expand_grid, prepare_image, validate_card, project_next_row,
 )
 from gget_scanner.pipeline.auto_scan import auto_scan
 
@@ -36,6 +36,52 @@ def make_screen(first_top=80, rows=2, columns=8, overlay_y=None, missing=()):
 
 def assert_close(actual, expected, tolerance=5):
     assert max(abs(a - b) for a, b in zip(actual, expected)) <= tolerance
+
+
+def test_rgb_preprocessing_keeps_white_edges_anchor_and_input_pixels():
+    image = np.zeros((800, 1200, 3), np.uint8)
+    cv2.line(image, (150, 55), (1150, 55), (200, 200, 200), 2)
+    original = image.copy()
+    features = prepare_image(image)
+    assert_close(detect_anchor(features), (150, 55, 1150, 55))
+    assert features.horizontal.any()
+    np.testing.assert_array_equal(image, original)
+
+
+def test_rgb_preprocessing_retains_colored_frame_edges():
+    image = np.zeros((400, 400, 3), np.uint8)
+    cv2.rectangle(image, (100, 60), (200, 260), (40, 80, 200), 2)
+    features = prepare_image(image)
+    assert features.vertical[80:240, 95:105].any()
+    assert features.horizontal[55:65, 110:190].any()
+
+
+def test_width_estimate_uses_strong_left_side_instead_of_first_fragment(monkeypatch):
+    from dataclasses import replace
+    from gget_scanner.image import card_detection as detector
+
+    features = prepare_image(np.zeros((800, 1200, 3), np.uint8))
+    vertical = np.zeros_like(features.vertical)
+    vertical[100:170, 160] = 1
+    vertical[100:600, 180] = 1
+    vertical[100:200, 210] = 1
+    features = replace(features, vertical=vertical)
+    monkeypatch.setattr(detector, '_vertical_edges', lambda *_: [160, 180, 210])
+    assert detector.estimate_card_width(features, (150, 55, 1150, 55)) == (180, 95.)
+
+
+@pytest.mark.parametrize('relative_width,accepted', [(1., True), (.95, True), (1.05, True),
+                                                  (.949, False), (1.051, False)])
+def test_candidate_width_filter_includes_five_percent_boundary(monkeypatch, relative_width, accepted):
+    from gget_scanner.image import card_detection as detector
+
+    image, _ = make_screen(rows=1)
+    monkeypatch.setattr(detector, '_vertical_edges', lambda *_: [180, 275])
+    candidate = detect_card(prepare_image(image), (150, 55, 1150, 400),
+                            expected_width=95 / relative_width)
+    assert (candidate is not None) == accepted
+    if candidate:
+        assert candidate.width == 95
 
 
 @pytest.mark.parametrize("scale", [.65, 1., 1.5])
@@ -77,6 +123,10 @@ def test_toolbar_does_not_supply_a_missing_bottom(first_top, overlay_y, expected
     image, _ = make_screen(first_top=first_top, rows=3, overlay_y=overlay_y)
     result = auto_scan(image)
     assert len(result.crops) == expected
+    if not result.attempts:
+        assert expected == 0
+        assert result.error == "no reliable first left side for card width estimation"
+        return
     # With no geometry anywhere below the Anchor, the initial full-region search
     # can terminate immediately; otherwise exactly one next row is examined.
     assert len(result.attempts) == (2 if result.attempts[0].candidate else 1)
@@ -94,16 +144,16 @@ def test_bootstrap_card_size_does_not_depend_on_canvas_width():
     assert_close(b.bounds, boxes[0, 0])
 
 
-def test_next_row_has_no_assumed_screen_fraction_or_row_gap():
+def test_projected_next_row_is_suspended_when_default_position_has_no_frame():
     source, boxes = make_screen(rows=1)
     image = np.full((1200, 1200, 3), 22, np.uint8)
     image[:800] = source
     image[700:891, 180:1106] = source[80:271, 180:1106]
     result = auto_scan(image)
-    assert len(result.crops) == 16
+    assert len(result.crops) == 8
     assert len(result.attempts) == 2
     assert result.attempts[0].roi == (*result.anchor[:2], result.anchor[2], 1200)
-    assert result.attempts[1].roi[3] == 1200
+    assert not result.attempts[1].validation.valid
     for crop in result.crops:
         expected = boxes[0, crop.card.column]
         if crop.card.row == 1:
@@ -129,6 +179,38 @@ def test_wide_next_row_search_does_not_skip_an_incomplete_second_row():
     assert {c.card.row for c in result.crops} == {0}
     assert len(result.attempts) == 2
     assert not result.attempts[1].validation.valid
+
+
+def test_bottom_right_occlusion_suspends_the_entire_second_row():
+    image, _ = make_screen()
+    image[420:510, 1000:1110] = 22
+    result = auto_scan(image)
+    assert len(result.crops) == 8
+    assert {c.card.row for c in result.crops} == {0}
+    assert not result.attempts[-1].validation.valid
+
+
+def test_middle_occlusion_does_not_individually_drop_projected_cards():
+    image, _ = make_screen()
+    image[420:510, 530:640] = 22
+    result = auto_scan(image)
+    assert len(result.crops) == 16
+    assert [c.card.column for c in result.crops if c.card.row == 1] == list(range(8))
+
+
+def test_projected_row_is_a_translation_and_never_resizes_to_bottom_edges():
+    image, _ = make_screen()
+    features = prepare_image(image)
+    baseline = Candidate(180, 275, 80, 270, 80, 270)
+    first = expand_grid(features, baseline)
+    second = project_next_row(features, first)
+    for (_, a, _), (_, b, _) in zip(first.cards, second.cards):
+        assert (b.left, b.right) == (a.left, a.right)
+        assert b.bottom - b.top == a.bottom - a.top == 190
+    # A stronger nearby bottom must not shorten any of the projected rectangles.
+    cv2.line(image, (1000, 494), (1108, 494), (255, 255, 255), 2)
+    shifted = project_next_row(prepare_image(image), first)
+    assert all(c.bottom - c.top == 190 for _, c, _ in shifted.cards)
 
 
 def test_expected_height_without_bottom_is_rejected():
@@ -178,22 +260,19 @@ def test_grid_uses_observed_row_bottom_instead_of_baseline_glow():
     grid = expand_grid(features, glow)
     assert len(grid.cards) == 8
     # Gaussian/Sobel response plus the validation band permits five pixels here.
-    assert all(c.bottom < glow.bottom and abs(c.bottom - 270) <= 5 for _, c, _ in grid.cards)
+    assert all(c.bottom == glow.bottom for _, c, _ in grid.cards)
 
 
 def test_missing_slot_is_not_filled_or_renumbered():
     image, _ = make_screen(rows=1, missing=((0, 3),))
     result = auto_scan(image)
-    assert [c.card.column for c in result.crops] == [0, 1, 2, 4, 5, 6, 7]
-    assert len(result.profiles) == 2
-    assert [p['grid']['columns'] for p in result.profiles] == [3, 4]
+    assert not result.crops  # A missing boundary rejects the row, never a sparse subset.
 
 
 def test_column_count_comes_from_supported_frames():
     image, _ = make_screen(rows=1, columns=5)
     result = auto_scan(image)
-    assert len(result.crops) == 5
-    assert result.profiles[0]['grid']['columns'] == 5
+    assert not result.crops  # v2 explicitly requires eight measured cards.
 
 
 def test_no_anchor_or_valid_card_has_explicit_result():

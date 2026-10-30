@@ -159,6 +159,23 @@ def _horizontal_edges(image: ImageFeatures, left: int, right: int,
     return [top + p for p in _peaks(projection, .45, max(2, round((right - left) * .025)))]
 
 
+def estimate_card_width(image: ImageFeatures, anchor: Bounds) -> tuple[int, float] | None:
+    """Estimate eight-column card width from the separator and first left side."""
+    left, top, right, _ = anchor
+    cell_width = (right - left) / 8
+    # With a gap smaller than a card, its left side is in the cell's left half.
+    edges = _vertical_edges(image, (left, top, round(left + cell_width / 2), image.gray.shape[0]))
+    if not edges:
+        return None
+    radius = image.edge_radius
+    def support(x):
+        band = image.vertical[top:, max(0, x - radius):x + radius + 1]
+        return int(band.max(axis=1).sum()), -x
+    first_left = max(edges, key=support)
+    margin = first_left - left
+    return first_left, ((right - left) - margin * 8) / 8
+
+
 def _support(image: ImageFeatures, candidate: Candidate) -> tuple[float, float, float, float]:
     if candidate.bounds is None:
         return (0., 0., 0., 0.)
@@ -227,7 +244,8 @@ def edge_tolerance(image: ImageFeatures, candidate: Candidate) -> int:
 
 
 def detect_card(image: ImageFeatures, search_roi: Bounds,
-                reference: Candidate | None = None) -> Candidate | None:
+                reference: Candidate | None = None,
+                expected_width: float | None = None) -> Candidate | None:
     """Propose the earliest frame in a bounded strip; missing ends stay unknown."""
     left, top, right, bottom = search_roi
     height, width = image.gray.shape
@@ -240,9 +258,10 @@ def detect_card(image: ImageFeatures, search_roi: Bounds,
     for i, x0 in enumerate(edges):
         for x1 in edges[i + 1:]:
             cw = x1 - x0
-            # Only geometric fit and the filter's resolving power bound width;
-            # no percentage of the full screenshot determines a card's size.
+            # Reject incompatible scales before searching for horizontal ends.
             if not 2 * image.edge_radius + 1 <= cw <= min(right - left, (bottom - top) * CARD_ASPECT_RANGE[1]):
+                continue
+            if expected_width is not None and not expected_width * .95 <= cw <= expected_width * 1.05:
                 continue
             if reference and (abs(cw - reference.width) > 2 * tolerance
                               or abs(x0 - reference.left) > tolerance):
@@ -385,81 +404,90 @@ def detect_next_row(image: ImageFeatures, previous_candidate: Candidate | None,
 
 def expand_grid(image: ImageFeatures, validated_card: Candidate,
                 optional_grid_reference: GridRow | None = None) -> GridRow:
-    """Estimate a multi-edge period, then verify each predicted frame (at most 8)."""
+    """Measure eight side pairs; completeness is decided at row level."""
     c = validated_card
-    if c.bounds is None or not validate_card(image, c).valid:
-        raise LayoutError("grid: baseline must be a validated complete card")
+    if c.bounds is None:
+        raise LayoutError("row: missing baseline geometry")
     h, w = image.gray.shape
-    edges = _vertical_edges(image, (c.left, c.top, w, c.bottom))
-    # Autocorrelation uses evidence from the entire row rather than differences
-    # between adjacent peaks, which can belong to artwork inside the same card.
     projection = image.vertical[c.top:c.bottom, c.left:].mean(axis=0)
-    projection = cv2.GaussianBlur(projection.reshape(1, -1), (0, 0),
-                                  max(1., c.width * .01))[0]
-    projection -= projection.mean()
-    correlation = np.correlate(projection, projection, 'full')[len(projection) - 1:]
-    low, high = round(c.width * 1.05), min(len(correlation), round(c.width * 1.55))
-    step = None
-    if high > low:
-        lag = low + int(np.argmax(correlation[low:high]))
-        if correlation[lag] > correlation[0] * .18:
-            step = float(lag)
-    if optional_grid_reference and optional_grid_reference.step_x:
-        prior = optional_grid_reference.step_x
-        if step is None or abs(step / prior - 1) <= .08:
-            step = prior if step is None else (step + prior) / 2
-    if step is None:
-        return GridRow(((0, c, validate_card(image, c)),), None)
-    # Median slope from several observed boundaries reduces cumulative drift.
-    slopes = []
-    for column in range(1, 8):
-        predicted = c.left + column * step
-        nearby = [x for x in edges if abs(x - predicted) < c.width * .12]
-        if nearby:
-            x = min(nearby, key=lambda x: abs(x - predicted))
-            slopes.append((x - c.left) / column)
-    if slopes:
-        refined = float(np.median(slopes))
-        radius = max(1, round(c.width * .01))
-        def alignment(period):
-            score = 0.
-            for column in range(8):
-                for side in (0, c.width):
-                    x = round(column * period) + side
-                    if x < len(projection):
-                        score += float(projection[max(0, x - radius):x + radius + 1].max())
-            return score
-        # A nearby artwork peak must not make the whole-row alignment worse.
-        if alignment(refined) >= alignment(step):
-            step = refined
-    positions = []
+    signal = cv2.GaussianBlur(projection.reshape(1, -1), (0, 0), max(1., c.width * .01))[0]
+    signal = signal - signal.mean()
+    corr = np.correlate(signal, signal, 'full')[len(signal) - 1:]
+    low, high = round(c.width * 1.05), min(len(corr), round(c.width * 1.55))
+    if high <= low or corr[0] == 0:
+        raise LayoutError("row: cannot measure horizontal spacing")
+    step = float(low + np.argmax(corr[low:high]))
+    tolerance = min(edge_tolerance(image, c), max(image.edge_radius, int((step - c.width) / 2)))
+    cards = []
     for column in range(8):
-        x = round(c.left + column * step)
-        if x + c.width >= w:
-            break
-        positions.append((column, x))
-    # Glow can make the baseline choose a nearby horizontal response. Compare
-    # observed ends in a narrow neighborhood using evidence from the whole row;
-    # never derive a bottom from top + expected height.
-    radius = max(2, round(c.width * .06))
-    bottoms = {c.bottom}
-    for _, x in positions:
-        bottoms.update(_horizontal_edges(image, x, x + c.width,
-                                         c.bottom - radius, c.bottom + radius + 1))
-    best_cards, best_score = (), (-1, -float('inf'))
-    for bottom in sorted(bottoms):
-        cards = []
-        for column, x in positions:
-            candidate = Candidate(x, x + c.width, c.top, bottom, c.top, bottom)
-            result = validate_card(image, candidate, c)
-            if result.valid:
-                cards.append((column, candidate, result))
-        # Keep column zero as the measured row baseline; avoid a correction that
-        # gains other cards by discarding the reference card itself.
-        if not cards or cards[0][0] != 0:
-            continue
-        score = (len(cards), sum(v.support[3] for _, _, v in cards)
-                 - abs(bottom - c.bottom) / c.width)
-        if score > best_score:
-            best_cards, best_score = tuple(cards), score
-    return GridRow(best_cards, step)
+        predicted = round(c.left + column * step)
+        sides = []
+        for x in (predicted, predicted + c.width):
+            a, b = max(c.left, x - tolerance), min(w, x + tolerance + 1)
+            if a >= b:
+                raise LayoutError("row: eight cards do not fit")
+            local = projection[a - c.left:b - c.left]
+            score = local - np.abs(np.arange(a, b) - x) / max(1, 2 * tolerance)
+            peak = int(np.argmax(score))
+            if local[peak] < .5:
+                raise LayoutError(f"row: missing side at column {column}")
+            sides.append(a + peak)
+        left, right = sides
+        if left >= right or (cards and left <= cards[-1][1].right):
+            raise LayoutError("row: overlapping or inverted side pairs")
+        if (not CARD_ASPECT_RANGE[0] <= (right - left) / (c.bottom - c.top) <= CARD_ASPECT_RANGE[1]
+                or abs((right - left) - c.width) > 2 * tolerance):
+            raise LayoutError(f"row: incompatible width at column {column}")
+        measured = Candidate(left, right, c.top, c.bottom, c.top, c.bottom)
+        cards.append((column, measured, Validation(True, _support(image, measured),
+                                                  "measured row boundary")))
+    return GridRow(tuple(cards), step)
+
+
+def project_next_row(image: ImageFeatures, row: GridRow) -> GridRow:
+    """Place the next row from a relative default, snapping only its first top."""
+    first = row.cards[0][1]
+    gap = max(image.edge_radius, round(row.step_x - first.width))
+    tolerance = edge_tolerance(image, first)
+    default_top = first.bottom + gap
+    tops = _horizontal_edges(image, first.left, first.right,
+                             first.bottom + tolerance,
+                             min(image.gray.shape[0], default_top + gap + tolerance + 1))
+    # A local window cannot borrow support from a card starting much farther
+    # below a false horizontal edge. Existing bevel/glow edges are not a veto.
+    def onset(y):
+        r = image.edge_radius
+        end = min(image.gray.shape[0], y + 2 * tolerance)
+        before = max(first.bottom, y - tolerance)
+        after_support, before_support = [], []
+        for x in (first.left, first.right):
+            band = image.vertical[:, max(0, x - r):x + r + 1].max(axis=1)
+            after_support.append(float(band[y:end].mean()) if end > y else 0.)
+            before_support.append(float(band[before:y].mean()) if y > before else 0.)
+        horizontal = float(image.horizontal[y, first.left:first.right].mean())
+        return sum(after_support) > sum(before_support), horizontal, -abs(y - default_top)
+    top = max(tops, key=onset) if tops else default_top
+    height = first.bottom - first.top
+    bottom = top + height
+    cards = []
+    for column, c, _ in row.cards:
+        projected = Candidate(c.left, c.right, top, bottom, top, bottom)
+        cards.append((column, projected, Validation(True, _support(image, projected),
+                                                  "projected from first row")))
+    return GridRow(tuple(cards), row.step_x)
+
+
+def check_row_corner(image: ImageFeatures, row: GridRow, reference: GridRow) -> Validation:
+    """The bottom-right card is the sole second-row completeness sample."""
+    last = row.cards[-1][1]
+    ref = reference.cards[-1][1]
+    tolerance = edge_tolerance(image, ref)
+    observed = _horizontal_edges(image, last.left, last.right,
+                                  last.bottom - tolerance, last.bottom + tolerance + 1)
+    result = validate_card(image, last, ref)
+    for bottom in sorted(observed, key=lambda y: abs(y - last.bottom)):
+        sample = Candidate(last.left, last.right, last.top, bottom, last.top, bottom)
+        check = validate_card(image, sample, ref)
+        if check.valid:
+            return Validation(True, check.support, "bottom-right sample passed; fixed height preserved")
+    return Validation(False, result.support, "second row suspended: no supported bottom near fixed frame")

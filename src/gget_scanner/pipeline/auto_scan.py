@@ -12,7 +12,8 @@ from gget_scanner.config.layout_loader import profile_from_dict
 from gget_scanner.config.layout_models import LayoutError, ResolvedCard, ResolvedLayout, SCALE
 from gget_scanner.image.card_detection import (
     Candidate, GridRow, Validation, detect_anchor, detect_card, detect_next_row,
-    expand_grid, prepare_image, validate_card,
+    expand_grid, prepare_image, validate_card, project_next_row, check_row_corner,
+    estimate_card_width,
 )
 from gget_scanner.image.cropper import CropResult, crop_cards
 from gget_scanner.image.debug_overlay import draw_overlay
@@ -45,13 +46,17 @@ def _profile(image_size, first, columns, step, second=None):
     def point(x, y):
         return [round(x * SCALE / width), round(y * SCALE / height)]
     x0, y0, x1, y1 = first.bounds
+    # Quantize inward so the existing outward-rounded crop bounds recover the
+    # measured integer rectangle exactly, including its fixed pixel height.
+    nx0, ny0 = int(np.ceil(x0 * SCALE / width)), int(np.ceil(y0 * SCALE / height))
+    nx1, ny1 = int(np.floor(x1 * SCALE / width)), int(np.floor(y1 * SCALE / height))
     return {
         "schema_version": 1, "profile_id": "auto_detected",
         "coordinate_system": {"type": "normalized_integer", "scale": SCALE,
                               "point_order": ["TL", "TR", "BR", "BL"]},
         "screen": {"reference_size": [width, height]},
         "grid": {"rows": 2 if second else 1, "columns": columns,
-                 "first_card": [point(x0, y0), point(x1, y0), point(x1, y1), point(x0, y1)],
+                 "first_card": [[nx0, ny0], [nx1, ny0], [nx1, ny1], [nx0, ny1]],
                  "horizontal_step": [round((step or 0) * SCALE / width), 0],
                  "vertical_step": point(second.left - first.left, second.top - first.top)
                  if second else [0, 0]},
@@ -71,8 +76,9 @@ def _export_layout(features, rows):
         for card, (_, _, detected, _) in zip(layout.cards, sources):
             bounds = card.bounds
             c = Candidate(bounds[0], bounds[2], bounds[1], bounds[3], bounds[1], bounds[3])
-            if (max(abs(a - b) for a, b in zip(bounds, detected.bounds)) > detected.width * .06
-                    or not validate_card(features, c, detected).valid):
+            if (bounds != detected.bounds
+                    or not (0 <= bounds[0] < bounds[2] <= width
+                            and 0 <= bounds[1] < bounds[3] <= height)):
                 return None
         return layout
 
@@ -106,8 +112,14 @@ def _export_layout(features, rows):
             data = _profile(size, group[0][1], len(group), grid.step_x)
             layout = resolve(data, sources)
             if layout is None:
-                raise LayoutError("layout export: normalized geometry failed edge validation")
-            append(data, sources, layout)
+                for source in sources:
+                    single = _profile(size, source[2], 1, None)
+                    resolved = resolve(single, [source])
+                    if resolved is None:
+                        raise LayoutError("layout export: geometry is outside the image")
+                    append(single, [source], resolved)
+            else:
+                append(data, sources, layout)
     return tuple(profiles), tuple(resolved_cards)
 
 
@@ -120,29 +132,38 @@ def auto_scan(image: np.ndarray) -> AutoScanResult:
         anchor = detect_anchor(features)
     except LayoutError as exc:
         error = str(exc)
-    if anchor:
+    width_estimate = estimate_card_width(features, anchor) if anchor else None
+    if anchor and width_estimate is None:
+        error = "no reliable first left side for card width estimation"
+    if anchor and width_estimate is not None:
         # A complete card can touch the list line; excluding a fixed band loses
         # its observed top. Aspect and bottom evidence distinguish clipped rows.
         roi = (anchor[0], anchor[1], anchor[2], height)
-        reference, grid_reference, search_reference = None, None, None
-        # Only a rejected initial row allows a third attempt. A rejected second
-        # row ends the scan, even when no complete rows have been found.
-        for row in range(3):
-            candidate = detect_card(features, roi, reference or search_reference)
-            search_reference = candidate
-            validation = validate_card(features, candidate, reference) if candidate else None
-            attempts.append(RowAttempt(row, roi, candidate, validation))
+        for row in range(2):
+            candidate = detect_card(features, roi, expected_width=width_estimate[1])
+            validation = validate_card(features, candidate) if candidate else None
+            grid = None
             if validation and validation.valid:
-                grid = expand_grid(features, candidate, grid_reference)
-                if grid.cards:
-                    rows.append((row, grid))
-                    reference, grid_reference = grid.cards[0][1], grid
-                    search_reference = reference
-            if len(rows) == 2 or (row >= 1 and not (validation and validation.valid)):
+                try:
+                    grid = expand_grid(features, candidate)
+                except LayoutError as exc:
+                    validation = Validation(False, validation.support, str(exc))
+            attempts.append(RowAttempt(row, roi, candidate, validation))
+            if grid:
+                rows.append((row, grid))
+                second = project_next_row(features, grid)
+                check = check_row_corner(features, second, grid)
+                attempts.append(RowAttempt(row + 1, roi, second.cards[-1][1], check))
+                if check.valid:
+                    rows.append((row + 1, second))
                 break
-            roi = detect_next_row(features, search_reference, roi)
-            if roi is None:
+            if candidate is None:
                 break
+            # An invalid first row provides only the next search's vertical start.
+            start = candidate.visible_bottom + features.edge_radius
+            if start >= height:
+                break
+            roi = (anchor[0], start, anchor[2], height)
     profiles, cards = _export_layout(features, rows)
     layout = ResolvedLayout("auto_detected", (width, height), (0, 0, width, height), cards)
     crops = crop_cards(image, layout)

@@ -25,22 +25,26 @@ uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
 ### 自動定位與產生 Layout
 
 ```powershell
-.venv/Scripts/gget-auto-scan.exe tests/fixtures/private/IPad/Test_UR.png --output outputs/IPad/geometry_roi/Test_UR
+.venv/Scripts/gget-auto-scan.exe tests/fixtures/private/IPad/Test_UR.png --output outputs/IPad/v2/Test_UR
 ```
 
-從列表上方水平白線起始，偵測第一張卡片外框，再估計水平週期並逐張驗證，最多 8 欄、兩列完整卡片。若初始列不完整，跳過後最多檢查到第三列；第二列也不完整就停止。底邊必須有影像證據，不以預估高度補齊。
+目前 v2 使用原圖 RGB 梯度，另加入白線推導卡寬 ±5% 的限制，已移除 Chroma 前處理。預估卡寬為白線長度 / 8 減左側留白。42 張實測都有輸出，共 600 張卡片；iPad 21 張各 16 張，iPhone 九張裁頂各 8 張、其餘各 16 張。相較 ±3%，兩張新 iPad SR 裁頂恢復輸出，其餘原有 28 張裁切座標不變；完整程式測試 244 項通過。數量不代表邊界完全準確，iPhone SR 裁頂框仍比人工認可的框寬鬆，`Test2_UR_cut_top_1` 另有偏寬問題。
+
+目前的 `v2`：左上第一張決定固定高度，同列八張只量測左右邊界及驗證寬度，不逐張評完整性或零散剔除。第二列只找第一張上邊，水平位置及各卡寬度沿用上列，高度完全沿用第一張；右下角的底邊採樣只決定整列保留或停用，不改變任何框的高度。上邊搜尋優先看水平連續性，並用短距離側邊增加確認方向，避免從遠處卡片借用支持度。初始列無效時只再找下一列作為基準；量不到八組邊界則回報該列失敗。此版本假設右下角狀態能代表整列，不會辨識僅遮住中間卡片的 UI。
 
 輸出到新的目錄，包含卡片 PNG、`overlay.png`、`manifest.json` 及現有 Schema v1 的 `layout.json`。若有被拒絕的位置或各列不能共用同一網格，改為多份 `layout_000.json` 等檔案；manifest 保留原始列欄、各邊支持度及 Layout 對應。支持度是邊緣覆蓋比例，不是辨識正確率。無有效卡片時仍輸出診斷圖與 manifest，退出碼為 1，不產生 Layout。
 
 目前真實驗證涵蓋本機 9 張 2388×1668 截圖：SR／SSR／UR 各有一般、`touch_top`（貼近列表白線）、`cut_top`（初始列頂部被裁）三種情況。每張皆取得 16 張卡片，共 144 張，與目視標註結構外框比較最低 IoU 大於 0.91。`cut_top` 會跳過第一列並保留第二、第三列，不把裁切列當成完整卡片。原始 UR 截圖另測試 0.65／1.3 倍縮放與 JPEG 品質 70，壓縮圖允許保守漏掉 1 張。1536×710、3120×1440、1536×1073 三種裝置原始截圖仍缺少，尚不能宣稱已驗證跨裝置版面。演算法與限制詳見 [架構文件](docs/architecture.md#自動卡片定位)。
 
-私有測資按 `tests/fixtures/private/<裝置名稱>/*.png` 分組。批次工具將兩版結果放到 `outputs/<裝置名稱>/<算法版本>/<測資名稱>/`：`baseline_f8cfbe5` 使用已提交版本，`geometry_roi` 使用目前工作目錄。每次由獨立子程序載入指定算法，不切換 Git 分支、不覆蓋來源碼。案例目錄包含成功產物及 `run.json`／`run.log`，裁切圖另核對原圖像素與重載 Layout；失敗保留錯誤資訊。`outputs/README.md` 連到各裝置比較表與定位總覽，`versions.json` 記錄 commit 與新版來源雜湊。所有輸出皆不納入 Git。重跑請選用新的根目錄：
+私有測資按 `tests/fixtures/private/<裝置名稱>/*.png` 分組。批次結果放到 `outputs/<裝置名稱>/<版本>/<測資名稱>/`：`baseline` 是最早版本，`v1` 是已提交的幾何 ROI 版，`v2` 是工作目錄整列版；Git 對應只存於工具與 `versions.json`，操作時使用版本名稱。每次由獨立子程序載入指定算法，不切換分支、不覆蓋來源碼。案例保留卡片、定位圖、Layout、manifest、run.json／run.log，並核對裁切像素與重載 Layout。`outputs/README.md` 是各裝置比較表入口。所有輸出皆忽略；重跑請選新根目錄：
 
 ```powershell
 .venv/Scripts/python.exe -m scripts.layout_batch --output outputs/scan_002
 ```
 
-工作目錄另有**尚未提交的幾何搜尋範圍實驗版**，對照基準為 `f8cfbe5`。初始 ROI 使用白線端點及圖片底部；有卡片幾何後，以實測側邊厚度與位置偏差建立下一列搜尋帶，再用已驗證卡高或 1:2 比例先驗限制底邊搜尋。這版移除 ROI 的畫面百分比限制，但 Anchor 偵測、垂直線投影及驗證仍有既有門檻。兩個裝置各九張、兩版共 36 次實測中，iPad 皆取得 16 張；iPhone 的裁切列仍有誤判，原版另有兩次 Layout 匯出失敗。比較表的 `ok` 僅代表執行成功，不代表框選正確。
+可加上 `--versions baseline v1` 只測已提交兩版，或 `--versions v2` 只新增新版結果；工具會合併既有比較表但拒絕覆寫案例目錄。
+
+`v1` 已保存為獨立 commit，保留幾何 ROI 與逐張驗證行為，供重現對照。既有 baseline／v1 的 iPhone 裁切列包含誤判及匯出失敗；比較表的 `ok` 僅表示執行成功，不代表人工確認正確。
 
 ### 裁切與檢查位置
 

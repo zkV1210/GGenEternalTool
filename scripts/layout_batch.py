@@ -15,18 +15,19 @@ import numpy as np
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE = "f8cfbe5"
-VERSIONS = (f"baseline_{BASELINE}", "geometry_roi")
+VERSION_REFS = {"baseline": BASELINE, "v1": "a93055d", "v2": None}
+VERSIONS = tuple(VERSION_REFS)
 
 
 def _worker(version: str, source: Path, output: Path) -> int:
-    if version == VERSIONS[0]:
+    if VERSION_REFS[version]:
         # Load the two committed modules in this child process. Git and the
         # working-tree modules remain untouched; dependencies are shared.
         for name, path in (
             ("gget_scanner.image.card_detection", "src/gget_scanner/image/card_detection.py"),
             ("gget_scanner.pipeline.auto_scan", "src/gget_scanner/pipeline/auto_scan.py"),
         ):
-            code = subprocess.check_output(["git", "show", f"{BASELINE}:{path}"],
+            code = subprocess.check_output(["git", "show", f"{VERSION_REFS[version]}:{path}"],
                                            cwd=ROOT, text=True, encoding="utf-8")
             module = types.ModuleType(name)
             module.__package__ = name.rsplit(".", 1)[0]
@@ -86,19 +87,19 @@ def _check_case(source: Path, output: Path) -> dict:
             "pixel_and_layout_checks": len(manifest["cards"]), "error": manifest["error"]}
 
 
-def run(fixtures: Path, output: Path) -> list[dict]:
+def run(fixtures: Path, output: Path, versions=VERSIONS) -> list[dict]:
     sources = sorted(p for d in fixtures.iterdir() if d.is_dir()
                      for p in d.glob("*.png"))
     if not sources:
         raise ValueError(f"No device-organized PNG fixtures in {fixtures}")
     targets = [output / p.parent.name / version / p.stem
-               for p in sources for version in VERSIONS]
+               for p in sources for version in versions]
     if any(path.exists() for path in targets):
         raise FileExistsError("Case output already exists; choose a new output root")
     records = []
     for source in sources:
         digest = hashlib.sha256(source.read_bytes()).hexdigest()
-        for version in VERSIONS:
+        for version in versions:
             case = output / source.parent.name / version / source.stem
             started = perf_counter()
             process = subprocess.run(
@@ -124,7 +125,6 @@ def run(fixtures: Path, output: Path) -> list[dict]:
             print(f"{source.parent.name}/{version}/{source.stem}: "
                   f"{record['status']}, {record['cards']} cards", flush=True)
         assert hashlib.sha256(source.read_bytes()).hexdigest() == digest, source
-    (output / "summary.json").write_text(json.dumps(records, indent=2), encoding="utf-8")
     return records
 
 
@@ -133,16 +133,17 @@ def report(output: Path, records: list[dict]) -> None:
              "成功輸出已核對原圖像素與重載 Layout；失敗請看對應 run.json／run.log。", ""]
     for device in sorted({r["device"] for r in records}):
         index.append(f"- [{device}]({device}/comparison.md)")
-        lines = [f"# {device}", "", "| 測資 | 原版張數 | 幾何版張數 | 狀態 |",
-                 "| --- | ---: | ---: | --- |"]
+        versions = [v for v in VERSIONS if any(r['device'] == device and r['version'] == v for r in records)]
+        lines = [f"# {device}", "", "張數為輸出數，ok 只表示執行成功，不代表人工驗證正確。", "",
+                 "| 測資 | " + " | ".join(versions) + " | 狀態 |",
+                 "| --- | " + " | ".join(['---:'] * len(versions)) + " | --- |"]
         for name in sorted({r["fixture"] for r in records if r["device"] == device}):
-            pair = [next(r for r in records if (r["device"], r["fixture"], r["version"])
-                         == (device, name, version)) for version in VERSIONS]
+            pair = [next((r for r in records if (r["device"], r["fixture"], r["version"])
+                          == (device, name, version)), None) for version in versions]
             links = [f"[{r['cards']}]({r['version']}/{name}/"
-                     f"{'cards_overview.png' if r['cards'] else 'run.json'})" for r in pair]
-            lines.append(f"| {name} | {links[0]} | {links[1]} | "
-                         f"{pair[0]['status']} / {pair[1]['status']} |")
-        for version in VERSIONS:
+                     f"{'cards_overview.png' if r['cards'] else 'run.json'})" if r else "not run" for r in pair]
+            lines.append(f"| {name} | " + " | ".join(links) + " | " + " / ".join(r['status'] if r else 'not run' for r in pair) + " |")
+        for version in versions:
             selected = [r for r in records if r["device"] == device and r["version"] == version]
             tiles = []
             for record in selected:
@@ -157,8 +158,10 @@ def report(output: Path, records: list[dict]) -> None:
                 tiles.append(tile)
             while len(tiles) % 3:
                 tiles.append(np.zeros_like(tiles[0]))
-            _save(output / device / version / "overlays.png", np.vstack([
-                np.hstack(tiles[i:i + 3]) for i in range(0, len(tiles), 3)]))
+            overview = output / device / version / "overlays.png"
+            if not overview.exists():
+                _save(overview, np.vstack([
+                    np.hstack(tiles[i:i + 3]) for i in range(0, len(tiles), 3)]))
             lines.extend(["", f"[{version} 定位總覽]({version}/overlays.png)"])
         (output / device / "comparison.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     (output / "README.md").write_text("\n".join(index) + "\n", encoding="utf-8")
@@ -168,6 +171,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--fixtures", type=Path, default=ROOT / "tests/fixtures/private")
     parser.add_argument("--output", type=Path, default=ROOT / "outputs")
+    parser.add_argument("--versions", nargs='+', choices=VERSIONS, default=VERSIONS)
     parser.add_argument("--worker", choices=VERSIONS, help=argparse.SUPPRESS)
     parser.add_argument("--image", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--case-output", type=Path, help=argparse.SUPPRESS)
@@ -176,15 +180,20 @@ def main(argv=None) -> int:
         return _worker(args.worker, args.image, args.case_output)
     args.output.mkdir(parents=True, exist_ok=True)
     metadata = {
-        "baseline_commit": subprocess.check_output(
-            ["git", "rev-parse", BASELINE], cwd=ROOT, text=True).strip(),
+        "version_refs": VERSION_REFS,
         "working_tree_head": subprocess.check_output(
             ["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
-        "geometry_roi_source_sha256": {p: hashlib.sha256((ROOT / p).read_bytes()).hexdigest()
+        "working_tree_source_sha256": {p: hashlib.sha256((ROOT / p).read_bytes()).hexdigest()
                                        for p in ("src/gget_scanner/image/card_detection.py",
                                                  "src/gget_scanner/pipeline/auto_scan.py")},
     }
-    records = run(args.fixtures.resolve(), args.output.resolve())
+    records = run(args.fixtures.resolve(), args.output.resolve(), args.versions)
+    previous = args.output / 'summary.json'
+    if previous.exists():
+        keys = {(r['device'], r['version'], r['fixture']) for r in records}
+        records = [r for r in json.loads(previous.read_text()) if
+                   (r['device'], r['version'], r['fixture']) not in keys] + records
+    previous.write_text(json.dumps(records, indent=2), encoding='utf-8')
     report(args.output.resolve(), records)
     (args.output / "versions.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     return 1 if any(r["status"] in ("error", "verification_error") for r in records) else 0

@@ -18,11 +18,12 @@ def test_cli_unicode_export_reload_and_overwrite_protection(tmp_path):
     output = tmp_path / '自動定位'
     assert main([str(path), '--output', str(output)]) == 0
     manifest = json.loads((output / 'manifest.json').read_text())
-    profile = load_layout(output / 'layout.json')
-    resolved = resolve_layout(profile, (1200, 800))
-    assert len(manifest['cards']) == len(resolved.cards) == 16
-    for record, card in zip(manifest['cards'], resolved.cards):
+    layouts = {name: resolve_layout(load_layout(output / name), (1200, 800)) for name in manifest['layouts']}
+    assert len(manifest['cards']) == sum(len(layout.cards) for layout in layouts.values()) == 16
+    for record in manifest['cards']:
+        card = layouts[record['layout_file']].cards[record['layout_index']]
         assert record['bounds'] == list(card.bounds)
+        assert record['bounds'] == record['detected_bounds']
         crop = cv2.imdecode(np.frombuffer((output / record['file']).read_bytes(), np.uint8), 1)
         l, t, r, b = card.bounds
         np.testing.assert_array_equal(crop, image[t:b, l:r])
@@ -45,10 +46,9 @@ def test_cli_split_layouts_preserve_original_columns(tmp_path):
     path = tmp_path / 'gap.png'
     path.write_bytes(cv2.imencode('.png', image)[1].tobytes())
     output = tmp_path / 'split'
-    assert main([str(path), '--output', str(output)]) == 0
+    assert main([str(path), '--output', str(output)]) == 1
     manifest = json.loads((output / 'manifest.json').read_text())
-    assert len(manifest['layouts']) == 2
-    assert [c['column'] for c in manifest['cards']] == [0, 1, 2, 4, 5, 6, 7]
+    assert not manifest['layouts'] and not manifest['cards']
     for name in manifest['layouts']:
         layout = resolve_layout(load_layout(output / name), (1200, 800))
         records = [c for c in manifest['cards'] if c['layout_file'] == name]
@@ -89,7 +89,9 @@ def test_private_screenshot_against_visually_checked_frame_bounds(scale, jpeg):
         intersection = max(0, min(actual[2], expected[2]) - max(actual[0], expected[0])) * max(0, min(actual[3], expected[3]) - max(actual[1], expected[1]))
         union = ((actual[2] - actual[0]) * (actual[3] - actual[1])
                  + (expected[2] - expected[0]) * (expected[3] - expected[1]) - intersection)
-        assert intersection / union > (.94 if scale == 1. and not jpeg else .90)
+        # v2 measures the first row; the second intentionally uses projected
+        # geometry and one corner sample, with a wider localization tolerance.
+        assert intersection / union > (.94 if row == 0 and scale == 1. and not jpeg else .90)
 
 
 # Visually checked structural frames, not glow. Pixel annotations are test-only;
@@ -105,6 +107,18 @@ PRIVATE_ROW_BOUNDS = {
     'Test_SSR_cut_top': ((343, 738), (793, 1187)),
     'Test_UR_cut_top': ((380, 774), (830, 1224)),
 }
+
+
+def test_iphone_sr_next_top_and_height_are_preserved():
+    path = Path(__file__).parent / 'fixtures/private/iPhone13pro/Test_SR.png'
+    if not path.exists():
+        pytest.skip('Optional iPhone SR screenshot is unavailable')
+    image = cv2.imdecode(np.frombuffer(path.read_bytes(), np.uint8), 1)
+    result = auto_scan(image)
+    assert len(result.crops) == 16
+    assert abs(result.rows[1][1].cards[0][1].top - 535) <= 3
+    heights = {c.bottom - c.top for _, row in result.rows for _, c, _ in row.cards}
+    assert heights == {325}
 
 
 @pytest.mark.parametrize('stem', PRIVATE_ROW_BOUNDS)
