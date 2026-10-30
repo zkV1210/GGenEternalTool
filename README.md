@@ -54,6 +54,7 @@ uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
 - [main baseline 與 worktree 協作](docs/baseline.md)：確認此次待提交內容、驗證結果及本機資料邊界時閱讀；baseline Commit 獲准完成後，依此建立各功能的獨立分支與環境。
 - [本地機體識別 Catalog](docs/catalog.md)：建立或查詢機體 JSON 時閱讀，包含掛機啟動指令、英文進度 log、停止與續跑規則、圖片對應、離線匯入及來源限制；與 Layout／Cropper 獨立。
 - [卡片屬性辨識](docs/recognition.md)：串接裁切結果、執行單張／批次分類、查看 Debug、加入稀有度樣本或實際職能模板時閱讀；包含參數、UNKNOWN／嚴格篩選規則、重新分類的本機測資及實測結果。
+- [右上角 SP／NONE 概念驗證](docs/enhancement.md)：測試右上角標記的獨立工具；包含參考資料、單張／批次指令、拒答結果與限制。尚未支援 SSP／ULT，星數暫緩，也尚未接入正式屬性輸出。
 - [架構與幾何規則](docs/architecture.md)：修改 Schema、Resolver、Cropper 或串接 Python API 前閱讀，包含座標、像素邊界、驗證及錯誤處理的完整定義。
 - [後續開發方向](docs/roadmap.md)：規劃 GUI 校準、辨識、Inventory 與 Capture／Tracking 時閱讀；這些未實作模組必須沿用目前的 Layout 邊界與職責分工。
 - [測試資料說明](tests/fixtures/README.md)：新增合成測試或本機截圖時閱讀，說明哪些資料可進 Git、哪些只保留在本機。
