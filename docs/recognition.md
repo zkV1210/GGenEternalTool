@@ -62,13 +62,13 @@ CropResult.image → Normalizer → normalized BGR ┬→ RarityClassifier
 
 ```powershell
 # 單張；使用此 worktree 已整理的本機參考包
-.venv/Scripts/gget-classify.exe outputs/Test_UR/card_000_r0_c0.png --config data/profiles/card_attributes.json --references data/local_assets/recognition/mvp/references.json --output outputs/card_single_01 --debug
+.venv/Scripts/gget-classify.exe outputs/cards/initial/Test_UR/card_000_r0_c0.png --config data/profiles/card_attributes.json --references data/local_assets/recognition/mvp/references.json --output outputs/recognition/card_single_01 --debug
 
 # 單一資料夾，不把 overlay／總覽當卡片
-.venv/Scripts/gget-classify.exe outputs/Test_SSR --config data/profiles/card_attributes.json --references data/local_assets/recognition/mvp/references.json --output outputs/card_batch_01
+.venv/Scripts/gget-classify.exe outputs/cards/initial/Test_SSR --config data/profiles/card_attributes.json --references data/local_assets/recognition/mvp/references.json --output outputs/recognition/card_batch_01
 
 # 已重新分類的整份測資；遞迴掃描，評估標記為 test 的部分
-.venv/Scripts/gget-classify.exe data/local_assets/recognition/mvp/cards --recursive --config data/profiles/card_attributes.json --references data/local_assets/recognition/mvp/references.json --labels data/local_assets/recognition/mvp/labels.json --split test --output outputs/card_evaluation_01
+.venv/Scripts/gget-classify.exe data/local_assets/recognition/mvp/cards --recursive --config data/profiles/card_attributes.json --references data/local_assets/recognition/mvp/references.json --labels data/local_assets/recognition/mvp/labels.json --split test --output outputs/recognition/card_evaluation_01
 ```
 
 也可使用 `.venv/Scripts/python.exe -m gget_scanner.pipeline.card_attributes`，參數相同。批次預設只讀 `card_*` 的 PNG／JPEG／WebP／BMP，單張輸入不限制檔名。輸出目錄必須全新；資料夾模式的輸出須在輸入目錄之外。單張損毀或比例異常不停止其他卡片；參考設定錯誤則先報錯。
@@ -117,20 +117,20 @@ result = classify_card(card_image, config, references)
 提取真實職能模板，`--box` 是標準化後的座標，需先用 Debug 圖確認，只包含職能徽章：
 
 ```powershell
-.venv/Scripts/python.exe -m gget_scanner.recognition.references outputs/Test_SSR/card_001_r0_c1.png --config data/profiles/card_attributes.json --label ATTACK --box 25 2 72 50 --output data/local_assets/recognition/mvp/templates/ATTACK_new.png
+.venv/Scripts/python.exe -m gget_scanner.recognition.references outputs/cards/initial/Test_SSR/card_001_r0_c1.png --config data/profiles/card_attributes.json --label ATTACK --box 25 2 72 50 --output data/local_assets/recognition/mvp/templates/ATTACK_new.png
 ```
 
 工具以指定顏色區塊產生 alpha，填補白色圖案內的孔洞。但同色背景可能污染自動遮罩，**新增模板必須檢視 alpha**。此情況可提供人工描繪的 uint8 灰階遮罩（尺寸與裁切 patch 相同；白色保留徽章、黑色排除背景）：
 
 ```powershell
-.venv/Scripts/python.exe -m gget_scanner.recognition.references outputs/Test_SSR/card_000_r0_c0.png --config data/profiles/card_attributes.json --label SUPPORT --box 25 2 72 50 --mask data/local_assets/recognition/mvp/templates/SUPPORT_mask.png --output data/local_assets/recognition/mvp/templates/SUPPORT_new.png
+.venv/Scripts/python.exe -m gget_scanner.recognition.references outputs/cards/initial/Test_SSR/card_000_r0_c0.png --config data/profiles/card_attributes.json --label SUPPORT --box 25 2 72 50 --mask data/local_assets/recognition/mvp/templates/SUPPORT_mask.png --output data/local_assets/recognition/mvp/templates/SUPPORT_new.png
 ```
 
 將新 PNG 加入 `role_templates`；模板與 alpha 都不覆寫既有檔案。同職能可以有多個模板，不使用網路通用圖示。
 
 ## 重新分類的本機測資與實測
 
-2026-10-30 已將 `outputs/Test*` 九個資料夾的 144 張卡片按實際框線與徽章重新標記，**複製**到 `data/local_assets/recognition/mvp/cards/<rarity>/<role>/`。原始 `outputs/Test*` 保留；`provenance.json` 紀錄來源、標籤及 SHA-256，副本內容與原圖一致。未以資料夾名作單張標籤：原 `Test_SR`／`Test_SR_touch_top` 前 5 張的金框卡已歸 SSR。
+2026-10-30 已將 `outputs/cards/initial/Test*` 九個資料夾的 144 張卡片按實際框線與徽章重新標記，**複製**到 `data/local_assets/recognition/mvp/cards/<rarity>/<role>/`。原始 `outputs/cards/initial/Test*` 保留；`provenance.json` 紀錄來源、標籤及 SHA-256，副本內容與原圖一致。未以資料夾名作單張標籤：原 `Test_SR`／`Test_SR_touch_top` 前 5 張的金框卡已歸 SSR。
 
 - SR 38、SSR 58、UR 48。
 - ATTACK 73、DEFENSE 38、SUPPORT 33。
@@ -156,7 +156,9 @@ result = classify_card(card_image, config, references)
 
 職能為 ATTACK 52／52、DEFENSE 27／27、SUPPORT 17／17，無交叉誤分類。33 張校準集為稀有度 31／33（2 UNKNOWN）、職能 33／33；沒有為了消除 UNKNOWN 而放寬距離門檻。測試集三個稀有度拒答分別是兩張超級鋼彈與一張鋼彈 F90 的裁切，框線特徵距離過大，保留候選與原始分數。
 
-單次測試集平均約 **7.18 ms／張**，包含圖片讀取、雜湊、標準化與分類，不包含參考包初次載入、Debug／JSON 寫入。這是本機單次量測，不是跨硬體效能保證。詳細本機結果與拒答 Debug 位於 `outputs/recognition-mvp-test/`；校準結果為 `outputs/recognition-calibration-reviewed-mask/`。圖片、標籤、參考 manifest 與測試報告均留本機，不提交 Git。
+單次測試集平均約 **7.18 ms／張**，包含圖片讀取、雜湊、標準化與分類，不包含參考包初次載入、Debug／JSON 寫入。這是本機單次量測，不是跨硬體效能保證。詳細本機結果與拒答 Debug 位於 `outputs/recognition/mvp/recognition-mvp-test/`；校準結果為 `outputs/recognition/calibration/recognition-calibration-reviewed-mask/`。圖片、標籤、參考 manifest 與測試報告均留本機，不提交 Git。
+
+2026-10-31 已整理本機輸出，入口為 `outputs/README.md`。裝置測資在 `outputs/cards/IPad/`、`outputs/cards/iPhone13pro/`，最初九組裁切在 `outputs/cards/initial/`；分類報告在 `outputs/recognition/`，歷史腳本在 `outputs/archive/`。來源 provenance 與目前報告的路徑已同步更新，圖片與分類分數不變。舊路徑可查 `outputs/relocations-20261031.json`；archive 的一次性腳本保留原內容，重跑前需檢查路徑假設。
 
 ## 驗證邊界
 
