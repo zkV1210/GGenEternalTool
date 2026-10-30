@@ -21,6 +21,40 @@ pipeline/quick_scan.py：協調以上步驟；其中 CLI 額外負責圖片讀�
 - `image/debug_overlay.py`：在 BGR 複本上繪圖；灰階與 BGRA 來源會轉換為 BGR，原圖不變。
 - `pipeline/quick_scan.py`：`quick_scan()` 是記憶體內 API。`main()` 是 CLI，委派既有模組處理幾何。
 
+## 自動卡片定位
+
+`image/card_detection.py` 處理傳統影像幾何；`pipeline/auto_scan.py` 串接資料、產生 Schema v1 Layout 與 CLI 輸出。原有 Loader、Resolver、Cropper、Overlay 介面不變；Catalog 不參與定位。
+
+```text
+原圖 → prepare_image → 灰階、方向性梯度遮罩、Canny（共用一次前處理）
+                         ↓
+detect_anchor → detect_card → validate_card → 保留有效列
+                         ↓
+                 detect_next_row → 重用候選偵測與驗證
+                         ↓
+有效列 → expand_grid → Schema v1 → Loader／Resolver → 再次邊界驗證
+                                                        ↓
+                                      crop_cards + draw_overlay + manifest
+```
+
+所有運算保留原圖解析度。Sobel 取各色彩通道的最大梯度，避免等亮度彩色邊框在灰階中消失；依梯度方向分出垂直與水平邊緣。HoughLinesP 找上方近水平、足夠長且有局部亮度對比的白線，合併重複／斷裂線段後取白線中心，避免透明白線在暗背景上被絕對白色閾值漏掉。
+
+`detect_card()` 在 Anchor 右下方的有限搜尋帶，透過形態學連接與方向投影找出持續側邊，配對寬度合理的側邊，再找影像實際存在的上下邊。候選保留 `visible_top`／`visible_bottom` 及可缺失的 `top`／`bottom`；可見高度不代表完整高度。候選評分包含邊緣支持、比例、側邊端點與水平邊距離，以及可選參考尺寸；先以側邊區段區分列，避免錯誤頂邊候選排除真正卡框。
+
+`validate_card()` 才決定能否裁切：寬高比限制為 0.43～0.58，左右邊覆蓋至少 65%、頂邊至少 55%、底邊至少 60%，並確認角點鄰域、底部側邊延伸及間隙。支持度在隨卡寬縮放的窄帶內計算，容忍邊框厚度與斜切角。跨越畫面的連續橫線、延續至兩側間隙的疑似 UI 底邊、仍向下延伸的側邊都可能造成拒絕。這些是保守影像規則，不是機體辨識或遮擋分類器；規則閾值仍需更多裝置素材驗證。
+
+不完整第一列只提供可信的 X 範圍、寬度與可見端點，供 `detect_next_row()` 向下建立一次有限搜尋帶；無候選時使用有界的下一搜尋帶重新偵測，不補造完整高度。第一列有效時最多檢查第二列；只有初始列無效且第二列有效，才繼續第三列。第二列無效立即停止，最多保留兩列。無法取得可靠幾何時可能回報無有效卡片。
+
+`expand_grid()` 對有效列垂直邊緣投影做一維自相關，在卡寬 1.05～1.55 倍的範圍估計水平週期，再以多組接近預測的實測邊界斜率中位數修正，避免立繪內部峰值污染相鄰距離。第二有效列可參考已驗證週期。最多預測 8 欄，每個位置重用 `validate_card()`，不保證固定輸出 8 張；沒有週期證據時只保留基準卡片。
+
+自動流程保留實際列表列欄編號，跳過第一列後輸出的列號為 1、2。匯出先嘗試完整雙列網格，不能表示時按各列連續有效區段拆成多份既有 Schema v1，不改 Schema、不補缺洞。標準化整數取整後重新經 Loader／Resolver，並驗證實際像素矩形；裁切與 manifest 使用這份已驗證的匯出幾何。manifest 的 `detected_bounds` 保留取整前偵測框，`bounds` 為實際裁切框；`layout_file`／`layout_index` 對應匯出 Layout 的局部編號。這些資料不屬於 Inventory。
+
+CLI 不覆寫既有目錄。無卡片時保留 `overlay.png` 與失敗階段／原因，退出碼 1；成功時另外輸出 Layout 與卡片。磁碟中途失敗可能留下部分檔案，需使用新目錄重試。
+
+測試包括已知像素框的合成圖、初始列截斷後兩列有效、操作列遮擋、缺欄、5 欄、縮放、JPEG、Unicode 路徑與 Layout 重載後逐像素裁切比對。本機真實圖另與目視檢查的結構外框座標比較 IoU；不把發光範圍當作結構外框。2388×1668 原圖取 16 張、IoU 大於 0.94；縮放 0.65／1.3 倍與 JPEG 品質 70 測試中，保留框 IoU 大於 0.90，JPEG 可能保守漏掉 1 張。這不是其他裝置的驗證結果。
+
+OpenCV API 透過 Context7 查閱官方 4.13.0 文件（Sobel、形態學與 HoughLinesP）；Context7 未提供 4.14.0 文件版本，實際執行環境為 OpenCV 4.14.0、NumPy 2.5.4、Python 3.13.16。
+
 ## Layout Schema v1
 
 完整範例為 [`sample_grid.json`](../data/profiles/sample_grid.json)。必要欄位如下：

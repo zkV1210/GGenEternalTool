@@ -1,12 +1,12 @@
 # 後續開發方向
 
-目前已完成單張圖片的 Layout 載入、解析、裁切、Debug Overlay 與最小 CLI，以及獨立的本地 Catalog 與離線匯入；Catalog 的已實作範圍與來源限制見 [catalog.md](catalog.md)。其餘下列功能仍為規劃。現有幾何模組與座標規則見 [architecture.md](architecture.md)。
+目前已完成單張圖片的自動卡片定位與 Layout 匯出、Layout 載入、解析、裁切、Debug Overlay 與 CLI，以及獨立的本地 Catalog 與離線匯入；Catalog 的已實作範圍與來源限制見 [catalog.md](catalog.md)。其餘下列功能仍為規劃。現有幾何模組與座標規則見 [architecture.md](architecture.md)。
 
 ## GUI 校準與 Layout 產生
 
 預計讓玩家上傳最終截圖，依序框選第一張卡片的 TL／TR／BR／BL、標記第二張卡片及下一排卡片的位置，再設定欄數與排數。由這些標記計算水平、垂直位移向量，預覽完整網格，微調後輸出同一份 Layout Schema。
 
-GUI 負責將像素標記轉成 0～10000 的整數座標，也需顯示取整後的預覽；不在 Cropper 加入 GUI 或手機型號規則。更後期的自動 UI 偵測亦只產生 Layout，沿用同一套 Loader／Resolver 驗證。獨立卡片覆寫與卡片內部 Artwork、Name、Rarity、Progression ROI 留待實際需求出現後擴充 Schema。
+GUI 負責將像素標記轉成 0～10000 的整數座標，也需顯示取整後的預覽；不在 Cropper 加入 GUI 或手機型號規則。目前自動定位已可產生同一份 Layout Schema，沿用 Loader／Resolver 驗證，但尚需更多裝置截圖確認泛化能力。獨立卡片覆寫與卡片內部 Artwork、Name、Rarity、Progression ROI 留待實際需求出現後擴充 Schema。
 
 ## 辨識、遊戲資料庫與 Inventory
 

@@ -1,14 +1,14 @@
 # GGET Account Scanner
 
-《SD 鋼彈 G 世代永恆》（SD Gundam G Generation ETERNAL）的**帳號資料擷取與 AI 諮詢工具**，目前已建立 Layout 解析與單張圖片裁切原型。
+《SD 鋼彈 G 世代永恆》（SD Gundam G Generation ETERNAL）的**帳號資料擷取與 AI 諮詢工具**，目前已建立自動卡片定位、Layout 解析與單張圖片裁切原型。
 
 本專案希望讓玩家不必手動逐台登記機體：先把遊戲畫面轉換成可檢查、可修改的帳號資料，再交給 LLM，根據實際持有內容討論配隊、養成資源、交換與抽卡選擇。
 
-> **專案狀態：幾何處理與本地 Catalog 原型。** 已實作 Layout JSON 載入與驗證、網格展開、矩形／透視裁切、Debug Overlay 及 CLI，以及 Catalog Schema、查詢、驗證、離線匯入與可續跑的公開資料／圖片抓取工具。機體辨識、OCR、Inventory JSON、模擬器控制與 LLM 功能尚未實作。
+> **專案狀態：幾何處理與本地 Catalog 原型。** 已實作 Anchor 起始的自動卡片定位與 Layout 匯出、Layout JSON 載入與驗證、網格展開、矩形／透視裁切、Debug Overlay 及 CLI，以及 Catalog Schema、查詢、驗證、離線匯入與可續跑的公開資料／圖片抓取工具。機體辨識、OCR、Inventory JSON、模擬器控制與 LLM 功能尚未實作。
 
 ## 目前可用：Layout 與單張圖片裁切
 
-程式只按照明確提供的 Layout 處理單張圖片，不會猜測手機比例、卡片位置或排數。相同圖片與設定會得到相同結果；輸入圖片與 Layout 不會被修改。
+原有 `gget-scan` 按明確提供的 Layout 處理單張圖片；新增 `gget-auto-scan` 從圖片邊緣估計 Layout。兩者都不修改輸入圖片或既有 Layout。
 
 ### 安裝與測試
 
@@ -21,6 +21,18 @@ uv pip install --python .venv/Scripts/python.exe -e ".[dev]"
 ```
 
 完成安裝後即可執行上述測試指令。虛擬環境、快取與輸出不納入 Git。
+
+### 自動定位與產生 Layout
+
+```powershell
+.venv/Scripts/gget-auto-scan.exe tests/fixtures/private/Test.png --output outputs/auto_scan_001
+```
+
+從列表上方水平白線起始，偵測第一張卡片外框，再估計水平週期並逐張驗證，最多 8 欄、兩列完整卡片。若初始列不完整，跳過後最多檢查到第三列；第二列也不完整就停止。底邊必須有影像證據，不以預估高度補齊。
+
+輸出到新的目錄，包含卡片 PNG、`overlay.png`、`manifest.json` 及現有 Schema v1 的 `layout.json`。若有被拒絕的位置或各列不能共用同一網格，改為多份 `layout_000.json` 等檔案；manifest 保留原始列欄、各邊支持度及 Layout 對應。支持度是邊緣覆蓋比例，不是辨識正確率。無有效卡片時仍輸出診斷圖與 manifest，退出碼為 1，不產生 Layout。
+
+目前真實驗證僅涵蓋本機 2388×1668 截圖及其縮放／JPEG 版本。原圖與 0.65、1.3 倍縮放各取得 16 張；JPEG 品質 70 取得 15～16 張，部分弱邊框會被保守拒絕。1536×710、3120×1440、1536×1073 三種裝置原始截圖目前缺少，尚不能宣稱已驗證跨裝置版面。演算法與限制詳見 [架構文件](docs/architecture.md#自動卡片定位)。
 
 ### 裁切與檢查位置
 
